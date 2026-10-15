@@ -1,0 +1,158 @@
+import { useEffect, useState } from 'react'
+import { useLiveQuery } from 'dexie-react-hooks'
+import { Link } from 'react-router-dom'
+import { db, IssueStatus, Project, platformList } from '../db'
+import { PlatformBadge } from './PlatformBadge'
+
+/** 已解决问题状态（与问题清单「已解决」筛选口径一致） */
+const RESOLVED_STATUSES: IssueStatus[] = ['fixed', 'ignored', 'design-confirmed']
+
+/** 相对时间 */
+export function timeAgo(ts: number): string {
+  const diff = Date.now() - ts
+  const m = 60e3
+  const h = 36e5
+  const d = 864e5
+  if (diff < m) return '刚刚'
+  if (diff < h) return `${Math.floor(diff / m)} 分钟前`
+  if (diff < d) return `${Math.floor(diff / h)} 小时前`
+  if (diff < 30 * d) return `${Math.floor(diff / d)} 天前`
+  return `${Math.floor(diff / (30 * d))} 个月前`
+}
+
+/** 无 Logo 占位底色：默认按项目 id 稳定散列取色，各项目颜色错开（用户自选 logoColor 优先） */
+export const LOGO_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f43f5e', '#14b8a6', '#0ea5e9', '#f97316', '#22c55e']
+export const logoColorOf = (id: string) => {
+  let h = 0
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0
+  return LOGO_COLORS[h % LOGO_COLORS.length]
+}
+/** 文字 Logo 实际底色：自选色优先，否则按 id 散列 */
+export const logoBgOf = (p: Pick<Project, 'id' | 'logoColor'>) => p.logoColor || logoColorOf(p.id)
+
+/** 项目 Logo 头像：有图显示图片，无图显示名称首字符（与项目详情页样式一致） */
+export function ProjectLogo({
+  project,
+  size = 36
+}: {
+  project: Project
+  size?: number
+}) {
+  const [url, setUrl] = useState('')
+
+  useEffect(() => {
+    if (!project.logoPath) {
+      setUrl('')
+      return
+    }
+    let alive = true
+    window.electronAPI
+      .readImage(project.logoPath)
+      .then((d) => {
+        if (alive) setUrl(d ?? '')
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [project.logoPath])
+
+  return (
+    <span
+      className="project-logo"
+      style={{
+        width: size,
+        height: size,
+        fontSize: size * 0.42,
+        ...(url ? {} : { background: logoBgOf(project) })
+      }}
+      title={project.name}
+    >
+      {url ? <img src={url} alt="" draggable={false} /> : project.name.slice(0, 1)}
+    </span>
+  )
+}
+
+/** 项目聚合统计：版本数 / 页面数 / 标注解决进度 / 最近更新 */
+export function useProjectStats(projectId: string) {
+  return useLiveQuery(async () => {
+    const versions = await db.versions.where('projectId').equals(projectId).toArray()
+    const pages = await db.pages.filter((p) => p.projectId === projectId).toArray()
+    const issues = pages.length
+      ? await db.issues.where('pageId').anyOf(pages.map((p) => p.id)).toArray()
+      : []
+    const reportable = issues.filter((i) => !(i.isAISuggested && !i.aiConfirmed))
+    const resolved = reportable.filter((i) => RESOLVED_STATUSES.includes(i.status)).length
+    const proj = await db.projects.get(projectId)
+    const latest = pages.reduce((m, p) => Math.max(m, p.createdAt), proj?.updatedAt ?? 0)
+    return {
+      versionCount: versions.length,
+      pageCount: pages.length,
+      total: reportable.length,
+      resolved,
+      latest
+    }
+  }, [projectId])
+}
+
+function ProgressBlock({ stats }: { stats: ReturnType<typeof useProjectStats> }) {
+  const pct = !stats || stats.total === 0 ? 100 : Math.round((stats.resolved / stats.total) * 100)
+  return (
+    <div className="card-progress">
+      <div className="progress-text">
+        <span>{stats ? `${stats.resolved}/${stats.total} 个标注已解决` : '统计中…'}</span>
+        <span>{pct}%</span>
+      </div>
+      <div className="progress-track">
+        <div className="progress-fill" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  )
+}
+
+/** 项目卡片（平铺视图）：平台标签 + 标注解决进度 + 版本/页面统计 + 更新时间 */
+export function ProjectCard({ project }: { project: Project }) {
+  const stats = useProjectStats(project.id)
+
+  return (
+    <Link to={`/project/${project.id}`} className="project-card card">
+      <div className="card-top">
+        <ProjectLogo project={project} size={40} />
+        <h3>{project.name}</h3>
+      </div>
+      <div className="card-tags">
+        {platformList(project.platform).map((p) => (
+          <PlatformBadge key={p} platform={p} />
+        ))}
+      </div>
+      <ProgressBlock stats={stats} />
+      <div className="card-foot">
+        <span>{stats ? `${stats.versionCount} 个版本 · ${stats.pageCount} 个页面` : ''}</span>
+        <span>{stats ? `${timeAgo(stats.latest)}更新` : ''}</span>
+      </div>
+    </Link>
+  )
+}
+
+/** 项目行（列表视图） */
+export function ProjectRow({ project }: { project: Project }) {
+  const stats = useProjectStats(project.id)
+
+  return (
+    <Link to={`/project/${project.id}`} className="project-row">
+      <ProjectLogo project={project} size={32} />
+      <span className="row-name">{project.name}</span>
+      {platformList(project.platform).map((p) => (
+        <PlatformBadge key={p} platform={p} />
+      ))}
+      <span className="row-progress">
+        {stats ? `${stats.resolved}/${stats.total} 个标注已解决` : '统计中…'}
+      </span>
+      <span className="row-counts">{stats ? `${stats.versionCount} 版本 · ${stats.pageCount} 页面` : ''}</span>
+      <span className="row-time">{stats ? `${timeAgo(stats.latest)}更新` : ''}</span>
+      <svg className="row-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="m9 18 6-6-6-6" />
+      </svg>
+    </Link>
+  )
+}

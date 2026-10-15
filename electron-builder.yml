@@ -1,0 +1,25 @@
+appId: com.quweijia.ui-walkthrough
+productName: AI 走查工具
+directories:
+  buildResources: build
+  output: release/${version}
+# 仅打包构建产物；排除源码、构建资源、开发期用户数据与打包输出
+files:
+  - out/**
+  - '!out/renderer/.vite'
+  - '!src'
+  - '!build'
+  - '!data'
+  - '!release'
+  - '!*.yml'
+  - '!*.md'
+asarUnpack:
+  - resources/**
+mac:
+  icon: build/icon.icns
+  # 未申请开发者证书，跳过签名（首次打开需右键 → 打开）
+  identity: null
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+    - target: zip

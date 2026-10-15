@@ -1,0 +1,10 @@
+node_modules/
+out/
+dist/
+data/
+release/
+.tscache/
+.trae/
+.data/
+*.log
+.DS_Store
