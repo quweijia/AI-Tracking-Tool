@@ -47,30 +47,89 @@ final class CompareCanvasModel {
     var syncScroll = true
 }
 
-/// 对比画布：四种视图模式渲染（对齐 Electron compare-container / overlay-canvas 行为）。
+/// 对比画布：四种视图模式渲染 + 标注层接线（对齐 Electron compare-container / overlay-canvas 行为）。
 /// 坐标口径与 Electron 一致：所有标注使用归一化 0~1 相对整幅图。
 struct CompareCanvasView: View {
     let designImage: NSImage?
     let shotImage: NSImage?
     @Bindable var model: CompareCanvasModel
+    /// 双图各自的标注（并排面板分别渲染，叠加模式仅渲染截图标注，对齐 Electron）
+    var designIssues: [Issue] = []
+    var shotIssues: [Issue] = []
+    var tool: AnnotationTool = .hand
+    var handlers: AnnotationHandlers? = nil
+    var flashId: String? = nil
+    var focusId: String? = nil
+    /// 聚焦标注中心（归一化 0~1；双图面板与叠加视口都滚动居中，对齐 Electron 聚焦行为）
+    var focusAnchor: CGPoint? = nil
+    /// 双图原始像素尺寸（测量 px 换算）
+    var designPixelSize: CGSize = .zero
+    var shotPixelSize: CGSize = .zero
+    /// 撤销/重做（并排面板标题按钮，对齐 panel-hist）
+    var canUndo = false
+    var canRedo = false
+    var onUndo: (() -> Void)? = nil
+    var onRedo: (() -> Void)? = nil
     /// 并排面板「重新上传」回调（对齐 Electron panel-upload；叠加模式无此按钮）
     var onReupload: ((TargetImage) -> Void)? = nil
 
     var body: some View {
         if model.mode.isOverlay {
-            OverlayCanvas(designImage: designImage, shotImage: shotImage, model: model)
+            OverlayCanvas(
+                designImage: designImage,
+                shotImage: shotImage,
+                model: model,
+                shotIssues: shotIssues,
+                tool: tool,
+                handlers: handlers,
+                flashId: flashId,
+                focusId: focusId,
+                focusAnchor: focusAnchor,
+                shotPixelSize: shotPixelSize
+            )
         } else {
-            SideBySideCanvas(designImage: designImage, shotImage: shotImage, model: model, onReupload: onReupload)
+            SideBySideCanvas(
+                designImage: designImage,
+                shotImage: shotImage,
+                model: model,
+                designIssues: designIssues,
+                shotIssues: shotIssues,
+                tool: tool,
+                handlers: handlers,
+                flashId: flashId,
+                focusId: focusId,
+                focusAnchor: focusAnchor,
+                designPixelSize: designPixelSize,
+                shotPixelSize: shotPixelSize,
+                canUndo: canUndo,
+                canRedo: canRedo,
+                onUndo: onUndo,
+                onRedo: onRedo,
+                onReupload: onReupload
+            )
         }
     }
 }
 
-// MARK: - 并排模式（双面板 + 同步滚动）
+// MARK: - 并排模式（双面板 + 同步滚动 + 标注层）
 
 private struct SideBySideCanvas: View {
     let designImage: NSImage?
     let shotImage: NSImage?
     @Bindable var model: CompareCanvasModel
+    var designIssues: [Issue]
+    var shotIssues: [Issue]
+    var tool: AnnotationTool
+    var handlers: AnnotationHandlers?
+    var flashId: String?
+    var focusId: String?
+    var focusAnchor: CGPoint?
+    var designPixelSize: CGSize
+    var shotPixelSize: CGSize
+    var canUndo: Bool
+    var canRedo: Bool
+    var onUndo: (() -> Void)?
+    var onRedo: (() -> Void)?
     var onReupload: ((TargetImage) -> Void)?
 
     /// 同步滚动防回环（A 滚动驱动 B，B 的几何变化回调里跳过）
@@ -82,12 +141,14 @@ private struct SideBySideCanvas: View {
         HStack(spacing: 8) {
             canvasPanel(
                 title: "设计稿", image: designImage, target: .design,
+                issues: designIssues, pixelSize: designPixelSize,
                 help: "重新选择设计稿图片"
             ) { offset in
                 sync(to: shotPos, from: offset)
             }
             canvasPanel(
                 title: "开发截图", image: shotImage, target: .screenshot,
+                issues: shotIssues, pixelSize: shotPixelSize,
                 help: "重新选择开发截图"
             ) { offset in
                 sync(to: designPos, from: offset)
@@ -108,13 +169,40 @@ private struct SideBySideCanvas: View {
         title: String,
         image: NSImage?,
         target: TargetImage,
+        issues: [Issue],
+        pixelSize: CGSize,
         help reuploadHelp: String,
         onScroll: @escaping (CGPoint) -> Void
     ) -> some View {
         VStack(spacing: 0) {
-            HStack {
+            HStack(spacing: 8) {
                 Text(title).font(.callout.weight(.medium))
+                Text("标注 \(issues.count)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 Spacer()
+                if let onUndo {
+                    Button {
+                        onUndo()
+                    } label: {
+                        Image(systemName: "arrow.uturn.left")
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(!canUndo)
+                    .help("撤销 (⌘Z)")
+                }
+                if let onRedo {
+                    Button {
+                        onRedo()
+                    } label: {
+                        Image(systemName: "arrow.uturn.right")
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(!canRedo)
+                    .help("重做 (⇧⌘Z)")
+                }
                 if let onReupload {
                     Button("重新上传") { onReupload(target) }
                         .buttonStyle(.borderless)
@@ -132,14 +220,34 @@ private struct SideBySideCanvas: View {
                             .resizable()
                             .scaledToFit()
                             .frame(width: geo.size.width * model.zoom)
+                            // 标注层必须挂在 frame(width:) 之后、maxWidth 之前，才能对齐图宽而非面板宽
+                            .overlay {
+                                if let handlers {
+                                    AnnotationLayer(
+                                        issues: issues,
+                                        tool: tool,
+                                        targetImage: target,
+                                        pixelSize: pixelSize,
+                                        handlers: handlers,
+                                        flashId: flashId,
+                                        focusId: focusId
+                                    )
+                                }
+                            }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
                     }
-                    .scrollPosition(designPosBinding(for: title))
+                    .scrollPosition(posBinding(for: title))
                     .onScrollGeometryChange(for: CGPoint.self) { geo in
                         CGPoint(x: geo.contentOffset.x, y: geo.contentOffset.y)
                     } action: { _, new in
                         onScroll(new)
+                    }
+                    .onChange(of: focusAnchor, initial: true) { _, _ in
+                        scrollToFocus(geo: geo.size, image: image, position: posBinding(for: title))
+                    }
+                    .onChange(of: model.zoom) { _, _ in
+                        scrollToFocus(geo: geo.size, image: image, position: posBinding(for: title))
                     }
                 }
             } else {
@@ -152,8 +260,20 @@ private struct SideBySideCanvas: View {
     }
 
     /// 两个面板各自的 ScrollPosition 状态按面板标题区分
-    private func designPosBinding(for title: String) -> Binding<ScrollPosition> {
+    private func posBinding(for title: String) -> Binding<ScrollPosition> {
         title == "设计稿" ? $designPos : $shotPos
+    }
+
+    /// 聚焦标注滚动居中（对齐 Electron：双图面板都滚到同一归一化位置）
+    private func scrollToFocus(geo: CGSize, image: NSImage, position: Binding<ScrollPosition>) {
+        guard let focusAnchor, geo.height > 0,
+              image.size.width > 0, image.size.height > 0 else { return }
+        let contentW = geo.width * model.zoom
+        let contentH = contentW / (image.size.width / image.size.height)
+        position.wrappedValue.scrollTo(
+            x: max(0, focusAnchor.x * contentW - geo.width / 2),
+            y: max(0, focusAnchor.y * contentH - geo.height / 2)
+        )
     }
 }
 
@@ -163,6 +283,16 @@ private struct OverlayCanvas: View {
     let designImage: NSImage?
     let shotImage: NSImage?
     @Bindable var model: CompareCanvasModel
+    /// 叠加模式仅渲染截图标注（对齐 Electron overlay AnnotationCanvas）
+    var shotIssues: [Issue]
+    var tool: AnnotationTool
+    var handlers: AnnotationHandlers?
+    var flashId: String?
+    var focusId: String?
+    var focusAnchor: CGPoint?
+    var shotPixelSize: CGSize
+
+    @State private var overlayPos = ScrollPosition()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -209,6 +339,20 @@ private struct OverlayCanvas: View {
                     }
                 }
                 .frame(width: width, height: height, alignment: .topLeading)
+                // 先挂标注层再挂分割线：分割线在最顶层，拖拽手势优先命中
+                .overlay {
+                    if let handlers {
+                        AnnotationLayer(
+                            issues: shotIssues,
+                            tool: tool,
+                            targetImage: .screenshot,
+                            pixelSize: shotPixelSize,
+                            handlers: handlers,
+                            flashId: flashId,
+                            focusId: focusId
+                        )
+                    }
+                }
                 .overlay {
                     if model.mode == .slider && model.showDivider {
                         dividerOverlay(width: width, height: height)
@@ -217,10 +361,17 @@ private struct OverlayCanvas: View {
                 .frame(maxWidth: .infinity, alignment: .top)
                 .padding(.vertical, 6)
             }
+            .scrollPosition($overlayPos)
+            .onChange(of: focusAnchor, initial: true) { _, _ in
+                scrollToFocus(geo: geo.size, aspect: aspect)
+            }
+            .onChange(of: model.zoom) { _, _ in
+                scrollToFocus(geo: geo.size, aspect: aspect)
+            }
         }
     }
 
-    /// 顶层开发截图：onion=50% 透明 / blink=1s steps 交替(0.85/0) / slider=左侧裁切
+    /// 顶层开发截图：onion=50% 透明 / blink=1s steps 交替(0.85/0) / slider=右侧裁切显示
     @ViewBuilder
     private func topImage(_ image: NSImage, width: CGFloat, height: CGFloat) -> some View {
         let base = Image(nsImage: image)
@@ -236,7 +387,8 @@ private struct OverlayCanvas: View {
                 base.opacity(frac < 0.5 ? 0.85 : 0)
             }
         case .slider:
-            base.mask(alignment: .leading) {
+            // 对齐 Electron clipPath inset(0 0 0 sliderPos%)：截图显示在分割线右侧
+            base.mask(alignment: .trailing) {
                 Color.white.frame(width: width * (1 - model.sliderPos / 100))
             }
         case .sideBySide:
@@ -269,6 +421,17 @@ private struct OverlayCanvas: View {
                         model.sliderPos = min(100, max(0, x / width * 100))
                     }
             )
+    }
+
+    /// 聚焦标注滚动居中（叠加模式画布盒以设计稿宽高比为准）
+    private func scrollToFocus(geo: CGSize, aspect: CGFloat) {
+        guard let focusAnchor, geo.height > 0, aspect > 0 else { return }
+        let contentW = geo.width * model.zoom
+        let contentH = contentW / aspect
+        overlayPos.scrollTo(
+            x: max(0, focusAnchor.x * contentW - geo.width / 2),
+            y: max(0, focusAnchor.y * contentH - geo.height / 2)
+        )
     }
 
     private func imageAspect(_ image: NSImage?) -> CGFloat? {

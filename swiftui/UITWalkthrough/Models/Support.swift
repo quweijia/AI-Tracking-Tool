@@ -60,6 +60,13 @@ extension IssueStatus {
 
 // MARK: - 颜色工具
 
+extension CGRect {
+    /// 两点 → 标准化矩形（支持反方向拖拽，宽高非负）
+    static func normalized(from a: CGPoint, to b: CGPoint) -> CGRect {
+        CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(b.x - a.x), height: abs(b.y - a.y))
+    }
+}
+
 /// hex 字符串 → Color（支持 #RGB / #RRGGBB / #RRGGBBAA；非法输入返回灰）
 func colorFromHex(_ hex: String) -> Color? {
     var s = hex.trimmingCharacters(in: .whitespacesAndNewlines)
