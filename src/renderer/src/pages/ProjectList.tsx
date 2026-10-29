@@ -1,8 +1,11 @@
 import { useLiveQuery } from 'dexie-react-hooks'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type DragEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import { db, Platform, PLATFORM_LABELS, platformList, bySort } from '../db'
 import ProjectModal from '../components/ProjectModal'
-import { ProjectCard, ProjectRow } from '../components/ProjectCard'
+import { ProjectCard, ProjectRow, type CardDnd } from '../components/ProjectCard'
+import heroBannerArtUrl from '../assets/hero-banner-xm.png'
+import heroBannerArtDarkUrl from '../assets/hero-banner-xm-dark.png'
 
 const PLATFORM_KEYS = Object.keys(PLATFORM_LABELS) as Platform[]
 
@@ -29,7 +32,7 @@ function useGlobalStats() {
   }, [])
 }
 
-function StatIcon({ kind }: { kind: 'projects' | 'pending' | 'pages' }) {
+function StatIcon({ kind }: { kind: 'projects' | 'pending' | 'resolved' | 'pages' }) {
   const common = {
     width: 16,
     height: 16,
@@ -55,6 +58,14 @@ function StatIcon({ kind }: { kind: 'projects' | 'pending' | 'pages' }) {
       </svg>
     )
   }
+  if (kind === 'resolved') {
+    return (
+      <svg {...common}>
+        <circle cx="12" cy="12" r="9" />
+        <path d="m8.5 12 2.5 2.5 4.5-5" />
+      </svg>
+    )
+  }
   return (
     <svg {...common}>
       <path d="m12 3 9 5-9 5-9-5Z" />
@@ -64,6 +75,7 @@ function StatIcon({ kind }: { kind: 'projects' | 'pending' | 'pages' }) {
 }
 
 export default function ProjectList() {
+  const { t } = useTranslation('projectList')
   // 与侧边栏树排序保持一致：手动 sortNo 优先，未拖过的按创建时间
   const projects = useLiveQuery(async () => (await db.projects.toArray()).sort(bySort), [])
   const stats = useGlobalStats()
@@ -81,53 +93,134 @@ export default function ProjectList() {
     )
   }, [projects, keyword, platformFilter])
 
+  // ===== 拖拽排序：仅在未筛选时启用（避免筛选子集重排污染整体顺序） =====
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [dropHint, setDropHint] = useState<{ id: string; pos: 'before' | 'after' } | null>(null)
+  const reorderable = !keyword.trim() && platformFilter === 'all'
+
+  /** 拖动换位：整列重排 sortNo（步长 10），与侧边栏树排序口径一致 */
+  const reorderProjects = async (fromId: string, toId: string, pos: 'before' | 'after') => {
+    if (fromId === toId) return
+    const ids = (projects ?? []).map((p) => p.id).filter((x) => x !== fromId)
+    const i = ids.indexOf(toId)
+    if (i < 0) return
+    ids.splice(pos === 'before' ? i : i + 1, 0, fromId)
+    for (let k = 0; k < ids.length; k++) {
+      await db.projects.update(ids[k], { sortNo: (k + 1) * 10 })
+    }
+  }
+
+  /** 卡片/行拖拽 props：axis 决定插入位置按横向（网格）还是纵向（列表）中点判断 */
+  const cardDnd = (id: string, axis: 'x' | 'y'): CardDnd => {
+    if (!reorderable) return {}
+    return {
+      dragging: dragId === id,
+      dropPos: dropHint?.id === id ? dropHint.pos : null,
+      handlers: {
+        draggable: true,
+        onDragStart: (e: DragEvent) => {
+          setDragId(id)
+          e.dataTransfer.effectAllowed = 'move'
+          e.dataTransfer.setData('text/plain', id)
+        },
+        onDragEnd: () => {
+          setDragId(null)
+          setDropHint(null)
+        },
+        onDragOver: (e: DragEvent) => {
+          if (dragId === null || dragId === id) return
+          e.preventDefault()
+          e.dataTransfer.dropEffect = 'move'
+          const rect = e.currentTarget.getBoundingClientRect()
+          const pos =
+            axis === 'x'
+              ? e.clientX < rect.left + rect.width / 2
+                ? ('before' as const)
+                : ('after' as const)
+              : e.clientY < rect.top + rect.height / 2
+                ? ('before' as const)
+                : ('after' as const)
+          setDropHint((prev) => (prev?.id === id && prev.pos === pos ? prev : { id, pos }))
+        },
+        onDragLeave: (e: DragEvent) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return
+          setDropHint((prev) => (prev?.id === id ? null : prev))
+        },
+        onDrop: (e: DragEvent) => {
+          if (dragId === null || dragId === id) return
+          e.preventDefault()
+          const pos = dropHint?.pos ?? 'after'
+          const fromId = dragId
+          setDragId(null)
+          setDropHint(null)
+          void reorderProjects(fromId, id, pos)
+        }
+      }
+    }
+  }
+
   return (
     <div className="page project-list-page">
-      <div className="list-head">
-        <div>
-          <h1>项目</h1>
-          <p className="list-sub">集中管理设计稿、开发截图与 AI 走查标注</p>
+      {/* 顶部横幅（原型样式）：标题 + 副标题 + 右上新建按钮 + AI 插图 + 底部统计卡 */}
+      <div className="rv2-hero projects-hero">
+        <div className="rv2-hero-main">
+          <h1 className="rv2-title">{t('title')}</h1>
+          <p className="rv2-desc">{t('desc')}</p>
         </div>
-        <button className="btn-primary" onClick={() => setShowNew(true)}>
-          ＋ 新建项目
+        <button className="btn-primary projects-new-btn" onClick={() => setShowNew(true)}>
+          {t('newProject')}
         </button>
-      </div>
-
-      <div className="stats-row">
-        <div className="stat-card">
-          <span className="stat-icon blue">
-            <StatIcon kind="projects" />
-          </span>
-          <div className="stat-body">
-            <span className="stat-label">全部项目</span>
-            <p className="stat-num">
-              {stats?.projectCount ?? 0}
-              <small>{stats ? `覆盖 ${stats.platformCount} 类端平台` : '统计中…'}</small>
-            </p>
+        {/* AI 插图：浅色 / 深色双版本，absolute 贴右缘、尺寸固定不随窗口缩放 */}
+        <img className="rv2-hero-art" src={heroBannerArtUrl} alt={t('artAlt')} draggable={false} />
+        <img className="rv2-hero-art-dark" src={heroBannerArtDarkUrl} alt="" draggable={false} />
+        <div className="projects-stat-row">
+          <div className="projects-stat-card">
+            <span className="stat-icon blue">
+              <StatIcon kind="projects" />
+            </span>
+            <div className="projects-stat-body">
+              <i>{t('allProjects')}</i>
+              <b>
+                {stats?.projectCount ?? 0}
+                <small>{t('unitCount')}</small>
+              </b>
+            </div>
           </div>
-        </div>
-        <div className="stat-card">
-          <span className="stat-icon orange">
-            <StatIcon kind="pending" />
-          </span>
-          <div className="stat-body">
-            <span className="stat-label">待处理标注</span>
-            <p className="stat-num">
-              {stats?.pendingCount ?? 0}
-              <small>{stats ? `${stats.resolvedTotal} 个标注已解决` : '统计中…'}</small>
-            </p>
+          <div className="projects-stat-card">
+            <span className="stat-icon orange">
+              <StatIcon kind="pending" />
+            </span>
+            <div className="projects-stat-body">
+              <i>{t('pendingAnnotations')}</i>
+              <b>
+                {stats?.pendingCount ?? 0}
+                <small>{t('unitCount')}</small>
+              </b>
+            </div>
           </div>
-        </div>
-        <div className="stat-card">
-          <span className="stat-icon green">
-            <StatIcon kind="pages" />
-          </span>
-          <div className="stat-body">
-            <span className="stat-label">已纳入页面</span>
-            <p className="stat-num">
-              {stats?.pageCount ?? 0}
-              <small>所有项目累计</small>
-            </p>
+          <div className="projects-stat-card">
+            <span className="stat-icon green">
+              <StatIcon kind="resolved" />
+            </span>
+            <div className="projects-stat-body">
+              <i>{t('resolvedAnnotations')}</i>
+              <b>
+                {stats?.resolvedTotal ?? 0}
+                <small>{t('unitCount')}</small>
+              </b>
+            </div>
+          </div>
+          <div className="projects-stat-card">
+            <span className="stat-icon purple">
+              <StatIcon kind="pages" />
+            </span>
+            <div className="projects-stat-body">
+              <i>{t('pagesIncluded')}</i>
+              <b>
+                {stats?.pageCount ?? 0}
+                <small>{t('unitCount')}</small>
+              </b>
+            </div>
           </div>
         </div>
       </div>
@@ -139,7 +232,7 @@ export default function ProjectList() {
             className={`plat-tab ${platformFilter === 'all' ? 'active' : ''}`}
             onClick={() => setPlatformFilter('all')}
           >
-            全部平台
+            {t('allPlatforms')}
           </button>
           {PLATFORM_KEYS.map((k) => (
             <button
@@ -148,7 +241,7 @@ export default function ProjectList() {
               className={`plat-tab ${platformFilter === k ? 'active' : ''}`}
               onClick={() => setPlatformFilter(k)}
             >
-              {PLATFORM_LABELS[k]}
+              {t(`platform_${k}`)}
             </button>
           ))}
         </div>
@@ -162,7 +255,7 @@ export default function ProjectList() {
             </span>
             <input
               className="input"
-              placeholder="搜索项目名称"
+              placeholder={t('searchPlaceholder')}
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
             />
@@ -172,7 +265,7 @@ export default function ProjectList() {
               type="button"
               className={`view-btn ${viewMode === 'grid' ? 'active' : ''}`}
               onClick={() => setViewMode('grid')}
-              title="平铺视图"
+              title={t('gridView')}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <rect x="3" y="3" width="7" height="7" rx="1.5" />
@@ -185,7 +278,7 @@ export default function ProjectList() {
               type="button"
               className={`view-btn ${viewMode === 'list' ? 'active' : ''}`}
               onClick={() => setViewMode('list')}
-              title="列表视图"
+              title={t('listView')}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
                 <path d="M8 6h13M8 12h13M8 18h13" />
@@ -201,25 +294,25 @@ export default function ProjectList() {
       {viewMode === 'grid' ? (
         <div className="project-grid">
           {filtered.map((p) => (
-            <ProjectCard key={p.id} project={p} />
+            <ProjectCard key={p.id} project={p} dnd={cardDnd(p.id, 'x')} />
           ))}
         </div>
       ) : (
         <div className="project-rows">
           {filtered.map((p) => (
-            <ProjectRow key={p.id} project={p} />
+            <ProjectRow key={p.id} project={p} dnd={cardDnd(p.id, 'y')} />
           ))}
         </div>
       )}
 
       {projects?.length === 0 && !showNew && (
         <div className="empty-state">
-          <p>还没有项目，点击右上角「新建项目」开始</p>
+          <p>{t('emptyNoProjects')}</p>
         </div>
       )}
       {!!projects?.length && filtered.length === 0 && (
         <div className="empty-state">
-          <p>没有符合筛选条件的项目</p>
+          <p>{t('emptyNoMatch')}</p>
         </div>
       )}
 

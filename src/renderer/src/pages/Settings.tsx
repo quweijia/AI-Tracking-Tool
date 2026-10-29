@@ -1,10 +1,15 @@
-import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import type { ReactNode } from 'react'
 import pkg from '../../../../package.json'
 import appIconUrl from '../assets/app-icon.png'
+import { db } from '../db'
 import { useSettingsStore } from '../stores/settings'
+import { useAppIconStore, APP_ICONS, type AppIconKey } from '../stores/appIcon'
 import USelect from '../components/USelect'
+import { changeAppLang, type AppLang } from '../i18n'
+import { DEFAULT_TOLERANCE, type ToleranceConfig } from '../../../shared/types'
 
 /** OpenAI 兼容模型配置 */
 interface AIModel {
@@ -17,10 +22,7 @@ interface AIModel {
   createdAt: number
 }
 
-interface FeishuConfig {
-  appId: string
-  appSecret: string
-}
+/** 文档平台凭据（飞书 / 腾讯文档 / 金山文档），字段由各平台 DocAppCard fields 定义 */
 
 interface FigmaMcpConfig {
   serverUrl: string
@@ -32,18 +34,20 @@ interface SkillItem {
   name: string
   desc: string
   url: string
+  /** Zip 包导入的指南文档内容（AI 识别时注入提示词） */
+  guides?: string[]
 }
 
 /** 主题模式：跟随系统 / 手动浅色 / 手动深色（Layout 同步监听 localStorage + 自定义事件） */
 type ThemeMode = 'system' | 'light' | 'dark'
 
-/** 预置模板：选填 baseUrl / model 快捷填充 */
-const PRESETS: { key: string; label: string; baseUrl: string; model: string }[] = [
-  { key: 'custom', label: '自定义', baseUrl: '', model: '' },
-  { key: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-vl2' },
-  { key: 'qwen', label: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-vl-max' },
-  { key: 'zhipu', label: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4v-plus' },
-  { key: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' }
+/** 预置模板：选填 baseUrl / model 快捷填充（label 文案在组件内按界面语言生成） */
+const PRESETS: { key: string; baseUrl: string; model: string }[] = [
+  { key: 'custom', baseUrl: '', model: '' },
+  { key: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-vl2' },
+  { key: 'qwen', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-vl-max' },
+  { key: 'zhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4v-plus' },
+  { key: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' }
 ]
 
 function genId(): string {
@@ -51,6 +55,38 @@ function genId(): string {
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
+
+/** 卡片操作 icon（悬停显示，替代文字按钮）：连通性测试 / 编辑 / 删除 / 设为默认 */
+const IconPlug = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 22v-5" />
+    <path d="M9 8V2" />
+    <path d="M15 8V2" />
+    <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
+  </svg>
+)
+
+const IconPencil = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+  </svg>
+)
+
+const IconTrash = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M3 6h18" />
+    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+    <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    <line x1="10" y1="11" x2="10" y2="17" />
+    <line x1="14" y1="11" x2="14" y2="17" />
+  </svg>
+)
+
+const IconStar = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+  </svg>
+)
 
 /** 卡片区块（title 可选：关于应用等无标题场景） */
 function Section({ title, desc, children }: { title?: string; desc?: string; children: ReactNode }) {
@@ -73,6 +109,7 @@ function ModelModal({
   onSave: (m: AIModel) => void
   onCancel: () => void
 }) {
+  const { t } = useTranslation('settings')
   const [preset, setPreset] = useState('custom')
   const [name, setName] = useState(initial?.name ?? '')
   const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? '')
@@ -88,13 +125,21 @@ function ModelModal({
     return () => window.removeEventListener('keydown', onKey)
   }, [onCancel])
 
+  const PRESET_LABELS: Record<string, string> = {
+    custom: t('preset_custom'),
+    deepseek: 'DeepSeek',
+    qwen: t('preset_qwen'),
+    zhipu: t('preset_zhipu'),
+    openai: 'OpenAI'
+  }
+
   const applyPreset = (key: string) => {
     setPreset(key)
     const p = PRESETS.find((x) => x.key === key)
     if (p && p.baseUrl) {
       setBaseUrl(p.baseUrl)
       setModel(p.model)
-      if (!name) setName(p.label)
+      if (!name) setName(PRESET_LABELS[key] ?? key)
       setVision(true)
     }
   }
@@ -104,9 +149,9 @@ function ModelModal({
   return (
     <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
       <div className="modal">
-        <h3>{initial ? '编辑模型' : '添加模型'}</h3>
+        <h3>{initial ? t('editModel') : t('addModel')}</h3>
 
-        <label className="field-label">快捷模板（OpenAI 兼容协议）</label>
+        <label className="field-label">{t('presetTitle')}</label>
         <div className="preset-chips">
           {PRESETS.map((p) => (
             <button
@@ -115,39 +160,39 @@ function ModelModal({
               className={`preset-chip ${preset === p.key ? 'active' : ''}`}
               onClick={() => applyPreset(p.key)}
             >
-              {p.label}
+              {PRESET_LABELS[p.key]}
             </button>
           ))}
         </div>
 
-        <label className="field-label">名称</label>
+        <label className="field-label">{t('fieldName')}</label>
         <input
           className="input"
-          placeholder="如：DeepSeek 视觉"
+          placeholder={t('namePlaceholder')}
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
 
-        <label className="field-label">Base URL</label>
+        <label className="field-label">{t('fieldBaseUrl')}</label>
         <input
           className="input"
-          placeholder="如：https://api.deepseek.com/v1"
+          placeholder={t('baseUrlPlaceholder')}
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
         />
 
         <div className="modal-grid">
           <div>
-            <label className="field-label">模型 ID</label>
+            <label className="field-label">{t('fieldModelId')}</label>
             <input
               className="input"
-              placeholder="如：gpt-4o"
+              placeholder={t('modelIdPlaceholder')}
               value={model}
               onChange={(e) => setModel(e.target.value)}
             />
           </div>
           <div>
-            <label className="field-label">API Key</label>
+            <label className="field-label">{t('fieldApiKey')}</label>
             <input
               className="input"
               type="password"
@@ -160,13 +205,13 @@ function ModelModal({
 
         <label className="inline-label settings-vision">
           <input type="checkbox" checked={vision} onChange={(e) => setVision(e.target.checked)} />
-          支持图像输入（走查识别必须勾选多模态模型）
+          {t('visionLabel')}
         </label>
 
         <div className="modal-actions">
           <span className="modal-spacer" />
           <button className="btn-secondary" onClick={onCancel}>
-            取消
+            {t('cancel')}
           </button>
           <button
             className="btn-primary"
@@ -184,7 +229,7 @@ function ModelModal({
               })
             }
           >
-            保存
+            {t('save')}
           </button>
         </div>
       </div>
@@ -194,6 +239,7 @@ function ModelModal({
 
 /** AI 模型管理：模型列表 + 测试连接 + 默认模型 */
 function ModelsSection() {
+  const { t } = useTranslation('settings')
   const [models, setModels] = useState<AIModel[]>([])
   const [defaultId, setDefaultId] = useState('')
   const [editing, setEditing] = useState<AIModel | null>(null)
@@ -222,20 +268,20 @@ function ModelsSection() {
 
   const testModel = async (id: string) => {
     setTestingId(id)
-    setTestMsg((prev) => ({ ...prev, [id]: { ok: true, text: '测试中...' } }))
+    setTestMsg((prev) => ({ ...prev, [id]: { ok: true, text: t('testing') } }))
     try {
       if (typeof window.electronAPI.aiTest !== 'function') {
-        throw new Error('主进程通道未加载，请重启应用后重试')
+        throw new Error(t('testChannelMissing'))
       }
       const res = await window.electronAPI.aiTest(id)
       setTestMsg((prev) => ({
         ...prev,
-        [id]: { ok: res.ok, text: res.ok ? `连接成功（${res.latencyMs}ms）` : res.message }
+        [id]: { ok: res.ok, text: res.ok ? t('testOk', { ms: res.latencyMs }) : res.message }
       }))
     } catch (err) {
       setTestMsg((prev) => ({
         ...prev,
-        [id]: { ok: false, text: `调用失败：${err instanceof Error ? err.message : String(err)}` }
+        [id]: { ok: false, text: t('testFail', { msg: err instanceof Error ? err.message : String(err) }) }
       }))
     }
     setTestingId('')
@@ -244,28 +290,28 @@ function ModelsSection() {
   return (
     <>
       <Section
-        title="模型列表"
-        desc="配置 OpenAI 兼容协议的多模态模型，用于 AI 自动识别走查问题。Key 仅保存在本机配置文件中。"
+        title={t('modelsTitle')}
+        desc={t('modelsDesc')}
       >
         <div className="settings-section-head">
-          <span className="model-count">{loaded ? `共 ${models.length} 个模型` : ''}</span>
-          <button type="button" className="btn-primary btn-sm" onClick={() => setShowNew(true)}>
-            ＋ 添加模型
+          <span className="model-count">{loaded ? t('modelCount', { count: models.length }) : ''}</span>
+          <button type="button" className="btn-primary" onClick={() => setShowNew(true)}>
+            {t('addModelBtn')}
           </button>
         </div>
         {!loaded ? null : models.length === 0 ? (
-          <p className="settings-empty">还没有模型配置，点击「添加模型」开始</p>
+          <p className="settings-empty">{t('emptyModels')}</p>
         ) : (
           <div className="model-list">
             {models.map((m) => (
               <div key={m.id} className={`model-item${m.id === defaultId ? ' default' : ''}`}>
                 <div className="model-item-head">
                   <span className="model-name">{m.name}</span>
-                  {m.id === defaultId && <span className="badge">默认</span>}
+                  {m.id === defaultId && <span className="badge">{t('badgeDefault')}</span>}
                   {m.vision ? (
-                    <span className="badge badge-green">图像输入</span>
+                    <span className="badge badge-green">{t('badgeVision')}</span>
                   ) : (
-                    <span className="badge model-badge-gray">纯文本</span>
+                    <span className="badge model-badge-gray">{t('badgeTextOnly')}</span>
                   )}
                 </div>
                 <div className="model-item-meta">
@@ -278,24 +324,37 @@ function ModelsSection() {
                 )}
                 <div className="model-item-actions">
                   {m.id !== defaultId && (
-                    <button className="btn-text" onClick={() => void persistModels(models, m.id)}>
-                      设为默认
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title={t('titleSetDefault')}
+                      onClick={() => void persistModels(models, m.id)}
+                    >
+                      <IconStar />
                     </button>
                   )}
-                  <button className="btn-text" disabled={testingId === m.id} onClick={() => testModel(m.id)}>
-                    {testingId === m.id ? '测试中...' : '测试连接'}
+                  <button
+                    type="button"
+                    className={`icon-btn${testingId === m.id ? ' testing' : ''}`}
+                    title={testingId === m.id ? t('testing') : t('testConn')}
+                    disabled={testingId === m.id}
+                    onClick={() => testModel(m.id)}
+                  >
+                    <IconPlug />
                   </button>
-                  <button className="btn-text" onClick={() => setEditing(m)}>
-                    编辑
+                  <button type="button" className="icon-btn" title={t('edit')} onClick={() => setEditing(m)}>
+                    <IconPencil />
                   </button>
                   <button
-                    className="btn-text danger"
+                    type="button"
+                    className="icon-btn danger"
+                    title={t('del')}
                     onClick={() => {
-                      if (!window.confirm(`确定删除模型「${m.name}」吗？`)) return
+                      if (!window.confirm(t('deleteModelConfirm', { name: m.name }))) return
                       void persistModels(models.filter((x) => x.id !== m.id))
                     }}
                   >
-                    删除
+                    <IconTrash />
                   </button>
                 </div>
               </div>
@@ -324,13 +383,82 @@ function ModelsSection() {
   )
 }
 
-/** 通用设置：主题（跟随系统/浅色/深色）+ 语言 */
+/** 应用图标选择：自定义 Dock 栏图标，选择后顶栏 logo 同步、立即生效并持久化 */
+function AppIconPicker() {
+  const { t } = useTranslation('settings')
+  const { key, setKey } = useAppIconStore()
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const select = async (k: AppIconKey, url?: string) => {
+    setKey(k)
+    void window.electronAPI.setConfig('appIcon', k)
+    // 自定义图标：资产 URL → dataURL 传给主进程设置 Dock（默认方案由主进程重置）
+    let dataUrl: string | undefined
+    if (url) {
+      try {
+        const blob = await (await fetch(url)).blob()
+        dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as string)
+          reader.onerror = () => reject(new Error('读取图标失败'))
+          reader.readAsDataURL(blob)
+        })
+      } catch {
+        dataUrl = undefined
+      }
+    }
+    const res = await window.electronAPI.setDockIcon(k, dataUrl)
+    setMsg({ ok: res.ok, text: res.message })
+  }
+
+  return (
+    <div className="settings-appicon">
+      <div className="settings-gen-row">
+        <div className="settings-gen-info">
+          <span className="settings-gen-label">{t('appIconLabel')}</span>
+          <span className="settings-gen-sub">{t('appIconDesc')}</span>
+        </div>
+      </div>
+      <div className="appicon-grid">
+        <button
+          type="button"
+          className={`appicon-item${key === 'default' ? ' active' : ''}`}
+          onClick={() => void select('default')}
+        >
+          <img src={appIconUrl} alt={t('appIconDefault')} draggable={false} />
+          <span>{t('appIconDefault')}</span>
+        </button>
+        {APP_ICONS.map((o) => (
+          <button
+            key={o.key}
+            type="button"
+            className={`appicon-item${key === o.key ? ' active' : ''}`}
+            onClick={() => void select(o.key, o.url)}
+          >
+            <img src={o.url} alt={o.label} draggable={false} />
+            <span>{o.label}</span>
+          </button>
+        ))}
+      </div>
+      {msg && <p className={`model-test-msg ${msg.ok ? 'ok' : 'err'}`}>{msg.text}</p>}
+    </div>
+  )
+}
+
+/** 通用设置：主题（跟随系统/浅色/深色）+ 语言 + 应用图标 */
 function GeneralSection() {
+  const { t } = useTranslation('settings')
   const [mode, setMode] = useState<ThemeMode>(() => {
     const v = localStorage.getItem('app-theme')
     return v === 'dark' || v === 'light' ? v : 'system'
   })
   const [lang, setLang] = useState(() => localStorage.getItem('app-lang') ?? 'zh-CN')
+  // 任务完成音效开关（默认开启，持久化到 electron config）
+  const [soundOn, setSoundOn] = useState(true)
+
+  useEffect(() => {
+    void window.electronAPI.getConfig().then((cfg) => setSoundOn(cfg.soundEnabled !== false))
+  }, [])
 
   const changeMode = (m: ThemeMode) => {
     setMode(m)
@@ -340,12 +468,14 @@ function GeneralSection() {
   }
 
   return (
-    <Section title="通用设置" desc="外观主题与语言偏好。选择「跟随系统」时，将随 macOS 深浅色模式自动切换。">
+    <Section title={t('generalTitle')} desc={t('generalDesc')}>
       <div className="settings-gen-row">
         <div className="settings-gen-info">
-          <span className="settings-gen-label">外观主题</span>
+          <span className="settings-gen-label">{t('themeLabel')}</span>
           <span className="settings-gen-sub">
-            当前：{mode === 'system' ? '跟随系统' : mode === 'dark' ? '深色' : '浅色'}
+            {t('themeCurrent', {
+              mode: mode === 'system' ? t('theme_system') : mode === 'dark' ? t('theme_dark') : t('theme_light')
+            })}
           </span>
         </div>
         <div className="segmented">
@@ -356,27 +486,101 @@ function GeneralSection() {
               className={`segment-item ${mode === m ? 'active' : ''}`}
               onClick={() => changeMode(m)}
             >
-              {m === 'system' ? '跟随系统' : m === 'dark' ? '深色' : '浅色'}
+              {m === 'system' ? t('theme_system') : m === 'dark' ? t('theme_dark') : t('theme_light')}
             </button>
           ))}
         </div>
       </div>
       <div className="settings-gen-row">
         <div className="settings-gen-info">
-          <span className="settings-gen-label">界面语言</span>
-          <span className="settings-gen-sub">英文语言包准备中，暂不支持切换</span>
+          <span className="settings-gen-label">{t('langLabel')}</span>
+          <span className="settings-gen-sub">{t('langDesc')}</span>
         </div>
         <USelect
           value={lang}
           onChange={(v) => {
             setLang(v)
-            localStorage.setItem('app-lang', v)
+            changeAppLang(v as AppLang)
           }}
           options={[
             { value: 'zh-CN', label: '简体中文' },
-            { value: 'en-US', label: 'English（即将上线）', disabled: true }
+            { value: 'en-US', label: 'English' }
           ]}
         />
+      </div>
+      <div className="settings-gen-row">
+        <div className="settings-gen-info">
+          <span className="settings-gen-label">{t('soundLabel')}</span>
+          <span className="settings-gen-sub">{t('soundDesc')}</span>
+        </div>
+        <button
+          type="button"
+          className={`switch ${soundOn ? 'on' : ''}`}
+          onClick={() => {
+            const next = !soundOn
+            setSoundOn(next)
+            void window.electronAPI.setConfig('soundEnabled', next)
+          }}
+        />
+      </div>
+      <AppIconPicker />
+    </Section>
+  )
+}
+
+/** 容差设置：结构化比对判定阈值（独立分区，全局一套规则，改动即时生效） */
+function ToleranceSection() {
+  const { t } = useTranslation('settings')
+  const [tolerance, setTolerance] = useState<ToleranceConfig>(DEFAULT_TOLERANCE)
+
+  useEffect(() => {
+    window.electronAPI.getConfig().then((cfg) => {
+      setTolerance({ ...DEFAULT_TOLERANCE, ...((cfg.walkTolerance as Partial<ToleranceConfig>) ?? {}) })
+    })
+  }, [])
+
+  /** 更新单个容差字段并持久化（自动走查比对时实时读取） */
+  const changeTolerance = (key: keyof ToleranceConfig, value: string): void => {
+    const n = Number(value)
+    if (!Number.isFinite(n) || n < 0) return
+    const next = { ...tolerance, [key]: Math.round(n * 100) / 100 }
+    setTolerance(next)
+    void window.electronAPI.setConfig('walkTolerance', next)
+  }
+
+  const TOL_FIELDS: { key: keyof ToleranceConfig; label: string; hint: string }[] = [
+    { key: 'size', label: t('tol_size'), hint: t('tol_size_hint') },
+    { key: 'typography', label: t('tol_typography'), hint: t('tol_typography_hint') },
+    { key: 'spacing', label: t('tol_spacing'), hint: t('tol_spacing_hint') },
+    { key: 'radius', label: t('tol_radius'), hint: t('tol_radius_hint') },
+    { key: 'border', label: t('tol_border'), hint: t('tol_border_hint') },
+    { key: 'color', label: t('tol_color'), hint: t('tol_color_hint') }
+  ]
+
+  return (
+    <Section
+      title={t('toleranceTitle')}
+      desc={t('toleranceDesc')}
+    >
+      <div className="settings-tolerance">
+        <div className="settings-tol-grid">
+          {TOL_FIELDS.map((f) => (
+            <label key={f.key} className="settings-tol-item" title={f.hint}>
+              <span className="settings-tol-label">{f.label}</span>
+              <span className="settings-tol-input">
+                <input
+                  className="input input-sm"
+                  type="number"
+                  min={0}
+                  step={f.key === 'color' ? 0.5 : 1}
+                  value={tolerance[f.key]}
+                  onChange={(e) => changeTolerance(f.key, e.target.value)}
+                />
+                <span className="settings-tol-unit">{f.key === 'color' ? 'ΔE' : 'px'}</span>
+              </span>
+            </label>
+          ))}
+        </div>
       </div>
     </Section>
   )
@@ -388,6 +592,10 @@ interface McpItem {
   name: string
   serverUrl: string
   pat: string
+  /** 启用开关（缺省视为启用，兼容旧数据） */
+  enabled?: boolean
+  /** 自定义代理地址（可选，内网环境 Figma API 走此代理） */
+  proxy?: string
 }
 
 /** 添加 / 编辑 MCP 服务弹窗（交互与添加模型一致） */
@@ -400,9 +608,11 @@ function McpModal({
   onSave: (m: McpItem) => void
   onCancel: () => void
 }) {
+  const { t } = useTranslation('settings')
   const [name, setName] = useState(initial?.name ?? '')
   const [serverUrl, setServerUrl] = useState(initial?.serverUrl ?? '')
   const [pat, setPat] = useState(initial?.pat ?? '')
+  const [proxy, setProxy] = useState(initial?.proxy ?? '')
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -417,21 +627,21 @@ function McpModal({
   return (
     <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
       <div className="modal">
-        <h3>{initial ? '编辑 MCP 服务' : '添加 MCP 服务'}</h3>
+        <h3>{initial ? t('editMcp') : t('addMcp')}</h3>
 
-        <label className="field-label">名称</label>
+        <label className="field-label">{t('fieldName')}</label>
         <input
           className="input"
           autoFocus
-          placeholder="如：Figma MCP"
+          placeholder={t('mcpNamePlaceholder')}
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
 
-        <label className="field-label">Server URL</label>
+        <label className="field-label">{t('mcpServerUrl')}</label>
         <input
           className="input"
-          placeholder="如：https://mcp.figma.com/mcp"
+          placeholder={t('mcpServerUrlPlaceholder')}
           value={serverUrl}
           onChange={(e) => setServerUrl(e.target.value)}
         />
@@ -445,22 +655,30 @@ function McpModal({
           onChange={(e) => setPat(e.target.value)}
         />
 
+        <label className="field-label">{t('mcpProxy')}</label>
+        <input
+          className="input"
+          placeholder={t('mcpProxyPlaceholder')}
+          value={proxy}
+          onChange={(e) => setProxy(e.target.value)}
+        />
+
         <p className="settings-desc">
-          获取方式：Figma → Settings → Security → Personal access tokens，生成后粘贴到上方。{' '}
+          {t('mcpHelp')}{' '}
           <a
             className="settings-link"
             href="https://help.figma.com/hc/en-us/articles/8045757426179-Manage-personal-access-tokens"
             target="_blank"
             rel="noreferrer"
           >
-            查看官方说明 ↗
+            {t('mcpHelpLink')}
           </a>
         </p>
 
         <div className="modal-actions">
           <span className="modal-spacer" />
           <button className="btn-secondary" onClick={onCancel}>
-            取消
+            {t('cancel')}
           </button>
           <button
             className="btn-primary"
@@ -471,11 +689,12 @@ function McpModal({
                 id: initial?.id ?? genId(),
                 name: name.trim(),
                 serverUrl: serverUrl.trim(),
-                pat: pat.trim()
+                pat: pat.trim(),
+                proxy: proxy.trim()
               })
             }
           >
-            保存
+            {t('save')}
           </button>
         </div>
       </div>
@@ -485,10 +704,13 @@ function McpModal({
 
 /** MCP 管理：MCP 服务列表（弹窗添加，与模型列表交互一致） */
 function McpSection() {
+  const { t } = useTranslation('settings')
   const [mcps, setMcps] = useState<McpItem[]>([])
   const [loaded, setLoaded] = useState(false)
   const [editing, setEditing] = useState<McpItem | null>(null)
   const [showNew, setShowNew] = useState(false)
+  const [testingId, setTestingId] = useState('')
+  const [testMsg, setTestMsg] = useState<Record<string, { ok: boolean; text: string }>>({})
 
   useEffect(() => {
     window.electronAPI.getConfig().then((c) => {
@@ -516,41 +738,95 @@ function McpSection() {
     await window.electronAPI.setConfig('mcps', next)
   }
 
+  /** 启用/停用开关（停用后自动走查不再读取该服务的 PAT） */
+  const toggleMcp = (m: McpItem) => {
+    void persist(mcps.map((x) => (x.id === m.id ? { ...x, enabled: x.enabled === false } : x)))
+  }
+
+  /** 连通性测试：走主进程代理自适应 fetch，任何 HTTP 响应视为可达 */
+  const testMcp = async (id: string) => {
+    const target = mcps.find((x) => x.id === id)
+    if (!target) return
+    setTestingId(id)
+    setTestMsg((prev) => ({ ...prev, [id]: { ok: true, text: t('testing') } }))
+    try {
+      const res = await window.electronAPI.mcpTest({
+        serverUrl: target.serverUrl,
+        pat: target.pat,
+        proxy: target.proxy
+      })
+      setTestMsg((prev) => ({ ...prev, [id]: { ok: res.ok, text: res.message } }))
+    } catch (err) {
+      setTestMsg((prev) => ({
+        ...prev,
+        [id]: { ok: false, text: t('testFail', { msg: err instanceof Error ? err.message : String(err) }) }
+      }))
+    }
+    setTestingId('')
+  }
+
   return (
     <Section
-      title="MCP 管理"
-      desc="配置 MCP 服务连接（如 Figma MCP），用于直接读取设计稿数据。Token 仅保存在本机配置文件中。"
+      title={t('mcpTitle')}
+      desc={t('mcpDesc')}
     >
       <div className="settings-section-head">
-        <span className="model-count">{loaded ? `共 ${mcps.length} 个服务` : ''}</span>
-        <button type="button" className="btn-primary btn-sm" onClick={() => setShowNew(true)}>
-          ＋ 添加 MCP
-        </button>
+        <span className="model-count">{loaded ? t('mcpCount', { count: mcps.length }) : ''}</span>
+          <button type="button" className="btn-primary" onClick={() => setShowNew(true)}>
+            {t('addMcpBtn')}
+          </button>
       </div>
       {!loaded ? null : mcps.length === 0 ? (
-        <p className="settings-empty">还没有 MCP 服务，点击「添加 MCP」开始</p>
+        <p className="settings-empty">{t('emptyMcps')}</p>
       ) : (
         <div className="model-list">
           {mcps.map((m) => (
-            <div key={m.id} className="model-item">
+            <div key={m.id} className={`model-item${m.enabled === false ? ' disabled' : ''}`}>
               <div className="model-item-head">
                 <span className="model-name">{m.name}</span>
+                {m.enabled !== false ? (
+                  <span className="badge badge-green">{t('mcpEnabled')}</span>
+                ) : (
+                  <span className="badge model-badge-gray">{t('mcpDisabled')}</span>
+                )}
+                {/* 右侧操作组：悬停 icon（测试/编辑/删除）+ 常驻开关 */}
+                <div className="mcp-head-actions">
+                  <button
+                    type="button"
+                    className={`icon-btn${testingId === m.id ? ' testing' : ''}`}
+                    title={testingId === m.id ? t('testing') : t('titleConnTest')}
+                    disabled={testingId === m.id}
+                    onClick={() => void testMcp(m.id)}
+                  >
+                    <IconPlug />
+                  </button>
+                  <button type="button" className="icon-btn" title={t('edit')} onClick={() => setEditing(m)}>
+                    <IconPencil />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn danger"
+                    title={t('del')}
+                    onClick={() => {
+                      if (!window.confirm(t('deleteMcpConfirm', { name: m.name }))) return
+                      void persist(mcps.filter((x) => x.id !== m.id))
+                    }}
+                  >
+                    <IconTrash />
+                  </button>
+                  <button
+                    type="button"
+                    className={`switch ${m.enabled !== false ? 'on' : ''}`}
+                    title={m.enabled !== false ? t('switchDisable') : t('switchEnable')}
+                    onClick={() => toggleMcp(m)}
+                  />
+                </div>
               </div>
               <div className="model-item-meta">{m.serverUrl}</div>
-              <div className="model-item-actions">
-                <button className="btn-text" onClick={() => setEditing(m)}>
-                  编辑
-                </button>
-                <button
-                  className="btn-text danger"
-                  onClick={() => {
-                    if (!window.confirm(`确定删除 MCP 服务「${m.name}」吗？`)) return
-                    void persist(mcps.filter((x) => x.id !== m.id))
-                  }}
-                >
-                  删除
-                </button>
-              </div>
+              {m.proxy && <div className="model-item-meta">{t('mcpProxyMeta', { proxy: m.proxy })}</div>}
+              {testMsg[m.id] && (
+                <p className={`model-test-msg ${testMsg[m.id].ok ? 'ok' : 'err'}`}>{testMsg[m.id].text}</p>
+              )}
             </div>
           ))}
         </div>
@@ -584,6 +860,7 @@ function SkillModal({
   onSave: (s: SkillItem) => void
   onCancel: () => void
 }) {
+  const { t } = useTranslation('settings')
   const [name, setName] = useState(initial?.name ?? '')
   const [desc, setDesc] = useState(initial?.desc ?? '')
   const [url, setUrl] = useState(initial?.url ?? '')
@@ -601,30 +878,30 @@ function SkillModal({
   return (
     <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
       <div className="modal">
-        <h3>{initial ? '编辑技能' : '添加技能'}</h3>
+        <h3>{initial ? t('editSkill') : t('addSkill')}</h3>
 
-        <label className="field-label">技能名称</label>
+        <label className="field-label">{t('skillName')}</label>
         <input
           className="input"
           autoFocus
-          placeholder="如：iOS HIG 检查清单"
+          placeholder={t('skillNamePlaceholder')}
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
 
-        <label className="field-label">技能说明（选填）</label>
+        <label className="field-label">{t('skillDesc')}</label>
         <textarea
           className="input"
           rows={3}
-          placeholder="描述该技能的走查要点，AI 自动识别时将作为检查指引注入"
+          placeholder={t('skillDescPlaceholder')}
           value={desc}
           onChange={(e) => setDesc(e.target.value)}
         />
 
-        <label className="field-label">技能链接（选填）</label>
+        <label className="field-label">{t('skillUrl')}</label>
         <input
           className="input"
-          placeholder="如：https://..."
+          placeholder={t('skillUrlPlaceholder')}
           value={url}
           onChange={(e) => setUrl(e.target.value)}
         />
@@ -632,7 +909,7 @@ function SkillModal({
         <div className="modal-actions">
           <span className="modal-spacer" />
           <button className="btn-secondary" onClick={onCancel}>
-            取消
+            {t('cancel')}
           </button>
           <button
             className="btn-primary"
@@ -647,7 +924,7 @@ function SkillModal({
               })
             }
           >
-            保存
+            {t('save')}
           </button>
         </div>
       </div>
@@ -655,12 +932,15 @@ function SkillModal({
   )
 }
 
-/** SkillHub：自定义技能列表（弹窗添加，与模型列表交互一致） */
+/** SkillHub：自定义技能列表（弹窗添加 + Zip 包导入，与模型列表交互一致） */
 function SkillsSection() {
+  const { t } = useTranslation('settings')
   const [skills, setSkills] = useState<SkillItem[]>([])
   const [loaded, setLoaded] = useState(false)
   const [editing, setEditing] = useState<SkillItem | null>(null)
   const [showNew, setShowNew] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   useEffect(() => {
     window.electronAPI.getConfig().then((c) => {
@@ -674,26 +954,67 @@ function SkillsSection() {
     await window.electronAPI.setConfig('skills', next)
   }
 
+  /** 导入 Zip 技能包：解析 manifest 与 .md 指南后入列 */
+  const importZip = async () => {
+    setImporting(true)
+    setImportMsg(null)
+    try {
+      const res = await window.electronAPI.importSkillZip()
+      if (res.canceled) return
+      if (!res.ok || !res.skill) {
+        setImportMsg({ ok: false, text: res.message || t('importFail') })
+        return
+      }
+      const item: SkillItem = {
+        id: genId(),
+        name: res.skill.name,
+        desc: res.skill.desc ?? '',
+        url: '',
+        guides: res.skill.guides
+      }
+      await persist([...skills, item])
+      setImportMsg({
+        ok: true,
+        text: t('importOk', { name: res.skill.name, count: res.skill.guides.length })
+      })
+    } catch (err) {
+      setImportMsg({ ok: false, text: t('importFailMsg', { msg: err instanceof Error ? err.message : String(err) }) })
+    } finally {
+      setImporting(false)
+    }
+  }
+
   return (
     <Section
       title="SkillHub"
-      desc="添加自定义技能（检查清单、走查要点等）。AI 自动识别时可在工作台选择技能，按技能要点进行走查。"
+      desc={t('skillsDesc')}
     >
       <div className="settings-section-head">
-        <span className="model-count">{loaded ? `共 ${skills.length} 个技能` : ''}</span>
-        <button type="button" className="btn-primary btn-sm" onClick={() => setShowNew(true)}>
-          ＋ 添加技能
-        </button>
+        <span className="model-count">{loaded ? t('skillCount', { count: skills.length }) : ''}</span>
+        <div className="settings-head-btns">
+          <button type="button" className="btn-secondary" disabled={importing} onClick={() => void importZip()}>
+            {importing ? t('importing') : t('importSkillZip')}
+          </button>
+          <button type="button" className="btn-primary" onClick={() => setShowNew(true)}>
+            {t('addSkillBtn')}
+          </button>
+        </div>
       </div>
+      {importMsg && <p className={`model-test-msg ${importMsg.ok ? 'ok' : 'err'}`}>{importMsg.text}</p>}
       {!loaded ? null : skills.length === 0 ? (
-        <p className="settings-empty">还没有添加技能</p>
+        <p className="settings-empty">{t('emptySkills')}</p>
       ) : (
         <div className="model-list">
           {skills.map((s) => (
             <div key={s.id} className="model-item">
               <div className="model-item-head">
                 <span className="model-name">{s.name}</span>
-                <span className="badge model-badge-gray">技能</span>
+                <span className="badge model-badge-gray">{t('badgeSkill')}</span>
+                {!!s.guides?.length && (
+                  <span className="badge model-badge-gray" title={t('guidesTitle')}>
+                    {t('guidesCount', { count: s.guides.length })}
+                  </span>
+                )}
               </div>
               {s.desc && <div className="model-item-meta">{s.desc}</div>}
               {s.url && (
@@ -702,17 +1023,19 @@ function SkillsSection() {
                 </a>
               )}
               <div className="model-item-actions">
-                <button className="btn-text" onClick={() => setEditing(s)}>
-                  编辑
+                <button type="button" className="icon-btn" title={t('edit')} onClick={() => setEditing(s)}>
+                  <IconPencil />
                 </button>
                 <button
-                  className="btn-text danger"
+                  type="button"
+                  className="icon-btn danger"
+                  title={t('del')}
                   onClick={() => {
-                    if (!window.confirm(`确定删除技能「${s.name}」吗？`)) return
+                    if (!window.confirm(t('deleteSkillConfirm', { name: s.name }))) return
                     void persist(skills.filter((x) => x.id !== s.id))
                   }}
                 >
-                  删除
+                  <IconTrash />
                 </button>
               </div>
             </div>
@@ -738,92 +1061,120 @@ function SkillsSection() {
   )
 }
 
-/** 应用授权：飞书集成（自建应用凭据） */
-function AuthSection() {
-  const [feishu, setFeishu] = useState<FeishuConfig>({ appId: '', appSecret: '' })
-  const [feishuMsg, setFeishuMsg] = useState<{ ok: boolean; text: string } | null>(null)
+/** 连接卡凭据字段定义（key 对应 config 内字段名；secret 控制已保存态打码） */
+interface DocAppField {
+  key: string
+  label: string
+  placeholder: string
+  secret?: boolean
+}
+
+/** 连通性测试函数（各平台主进程 IPC 验证凭据） */
+type DocAppTester = () => Promise<{ ok: boolean; message: string }>
+
+/** 应用授权连接卡片：凭据保存 + 测试连接（编辑态 / 已存只读两态） */
+function DocAppCard({
+  title,
+  desc,
+  configKey,
+  fields,
+  tester
+}: {
+  title: string
+  desc: string
+  /** config 存储键：feishu / tencentDocs / kingsoftDocs */
+  configKey: string
+  fields: DocAppField[]
+  tester: DocAppTester
+}) {
+  const { t } = useTranslation('settings')
+  const [cred, setCred] = useState<Record<string, string>>({})
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   /** 凭据已保存：只读展示，点「编辑」再进输入态 */
-  const [feishuSaved, setFeishuSaved] = useState(false)
-  const [feishuEditing, setFeishuEditing] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [editing, setEditing] = useState(false)
 
   useEffect(() => {
     window.electronAPI.getConfig().then((cfg) => {
-      const f = (cfg.feishu ?? {}) as Partial<FeishuConfig>
-      setFeishu({ appId: f.appId ?? '', appSecret: f.appSecret ?? '' })
-      const has = !!(f.appId && f.appSecret)
-      setFeishuSaved(has)
-      setFeishuEditing(!has)
+      const f = (cfg[configKey] ?? {}) as Record<string, string | undefined>
+      const next: Record<string, string> = {}
+      fields.forEach((fd) => (next[fd.key] = f[fd.key] ?? ''))
+      setCred(next)
+      setSaved(fields.every((fd) => (f[fd.key] ?? '').trim()))
+      setEditing(!fields.every((fd) => (f[fd.key] ?? '').trim()))
     })
-  }, [])
+  }, [configKey, fields])
 
-  const saveFeishu = async () => {
-    await window.electronAPI.setConfig('feishu', feishu)
-    setFeishuSaved(true)
-    setFeishuEditing(false)
-    setFeishuMsg({ ok: true, text: '已保存' })
+  const save = async () => {
+    await window.electronAPI.setConfig(configKey, cred)
+    setSaved(true)
+    setEditing(false)
+    setMsg({ ok: true, text: t('saved') })
   }
 
-  const testFeishu = async () => {
-    await window.electronAPI.setConfig('feishu', feishu)
-    setFeishuMsg(null)
-    const res = await window.electronAPI.feishuTest()
-    setFeishuMsg({ ok: res.ok, text: res.message })
+  const test = async () => {
+    setMsg({ ok: true, text: t('testing') })
+    try {
+      await window.electronAPI.setConfig(configKey, cred)
+      const res = await tester()
+      setMsg({ ok: res.ok, text: res.message })
+    } catch (err) {
+      // 主进程/preload 改动后未重启应用时，新通道不存在（is not a function），给出明确指引
+      const raw = err instanceof Error ? err.message : String(err)
+      setMsg({
+        ok: false,
+        text: raw.includes('is not a function') ? t('channelMissing') : t('testFailMsg', { msg: raw })
+      })
+    }
   }
+
+  const msgNode = msg ? (
+    <span className={msg.ok ? 'ok-label' : 'model-test-msg err inline'}>{msg.text}</span>
+  ) : null
 
   return (
-    <Section
-      title="飞书集成"
-      desc="使用飞书自建应用凭据（需开通云文档权限），用于一键将走查报告创建为飞书文档。"
-    >
-      {feishuEditing ? (
+    <Section title={title} desc={desc}>
+      {editing ? (
         <>
-          <div className="form-row">
-            <input
-              className="input grow"
-              placeholder="App ID（cli_xxx）"
-              value={feishu.appId}
-              onChange={(e) => setFeishu({ ...feishu, appId: e.target.value })}
-            />
-            <input
-              className="input grow"
-              type="password"
-              placeholder="App Secret"
-              value={feishu.appSecret}
-              onChange={(e) => setFeishu({ ...feishu, appSecret: e.target.value })}
-            />
+          <div className="docapp-fields">
+            {fields.map((fd) => (
+              <input
+                key={fd.key}
+                className="input"
+                placeholder={fd.placeholder}
+                value={cred[fd.key] ?? ''}
+                onChange={(e) => setCred({ ...cred, [fd.key]: e.target.value })}
+              />
+            ))}
           </div>
           <div className="form-row settings-feishu-actions">
-            <button className="btn-primary" onClick={saveFeishu}>
-              保存
+            <button className="btn-primary" onClick={save}>
+              {t('save')}
             </button>
-            <button className="btn-secondary" onClick={testFeishu}>
-              测试连接
+            <button className="btn-secondary" onClick={test}>
+              {t('testConn')}
             </button>
-            {feishuMsg && (
-              <span className={feishuMsg.ok ? 'ok-label' : 'model-test-msg err inline'}>{feishuMsg.text}</span>
-            )}
+            {msgNode}
           </div>
         </>
       ) : (
         <div className="feishu-view">
-          <div className="feishu-view-row">
-            <span className="feishu-view-label">App ID</span>
-            <span className="feishu-view-value">{feishu.appId || '未配置'}</span>
-          </div>
-          <div className="feishu-view-row">
-            <span className="feishu-view-label">App Secret</span>
-            <span className="feishu-view-value">{feishuSaved ? '••••••••••••（已保存）' : '未配置'}</span>
-          </div>
+          {fields.map((fd) => (
+            <div className="feishu-view-row" key={fd.key}>
+              <span className="feishu-view-label">{fd.label}</span>
+              <span className="feishu-view-value">
+                {fd.secret && saved ? t('maskedSaved') : cred[fd.key] || t('notConfigured')}
+              </span>
+            </div>
+          ))}
           <div className="form-row settings-feishu-actions">
-            <button className="btn-secondary" onClick={() => setFeishuEditing(true)}>
-              编辑
+            <button className="btn-secondary" onClick={() => setEditing(true)}>
+              {t('edit')}
             </button>
-            <button className="btn-secondary" onClick={testFeishu}>
-              测试连接
+            <button className="btn-secondary" onClick={test}>
+              {t('testConn')}
             </button>
-            {feishuMsg && (
-              <span className={feishuMsg.ok ? 'ok-label' : 'model-test-msg err inline'}>{feishuMsg.text}</span>
-            )}
+            {msgNode}
           </div>
         </div>
       )}
@@ -831,56 +1182,194 @@ function AuthSection() {
   )
 }
 
-/** 浏览器：内置浏览器能力占位说明 */
-function BrowserSection() {
+/** 应用授权：飞书 / 腾讯文档 / 金山文档 连接配置（均支持测试连接与导出创建） */
+function AuthSection() {
+  const { t } = useTranslation('settings')
+  // 三平台连接卡字段（useMemo 保持引用稳定，避免 DocAppCard 的 useEffect 反复重置编辑态）
+  const feishuFields = useMemo<DocAppField[]>(
+    () => [
+      { key: 'appId', label: 'App ID', placeholder: t('feishuAppIdPlaceholder') },
+      { key: 'appSecret', label: 'App Secret', placeholder: 'App Secret', secret: true }
+    ],
+    [t]
+  )
+  const tencentFields = useMemo<DocAppField[]>(
+    () => [
+      { key: 'clientId', label: 'Client ID', placeholder: t('tencentClientIdPlaceholder') },
+      { key: 'accessToken', label: 'Access Token', placeholder: 'Access Token', secret: true },
+      { key: 'openId', label: 'Open ID', placeholder: 'Open ID' }
+    ],
+    [t]
+  )
+  const kingsoftFields = useMemo<DocAppField[]>(
+    () => [
+      { key: 'appId', label: 'App ID', placeholder: 'App ID' },
+      { key: 'appSecret', label: 'App Secret', placeholder: 'App Secret', secret: true }
+    ],
+    [t]
+  )
+
   return (
-    <Section title="内置浏览器" desc="计划中的 AI 自动走查执行环境。">
-      <div className="placeholder-box">
-        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
-          <circle cx="12" cy="12" r="9" />
-          <path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" />
-        </svg>
-        <p>
-          <b>内置浏览器功能开发中</b>
-          <br />
-          未来将支持直接读取 Figma 设计稿与研发上线的页面链接，自动打开并运行
-          AI 整页走查，无需手动上传开发截图。
-        </p>
-      </div>
-      <div className="settings-gen-row browser-switch-row">
+    <>
+      <DocAppCard
+        title={t('feishuTitle')}
+        desc={t('feishuDesc')}
+        configKey="feishu"
+        fields={feishuFields}
+        tester={() => window.electronAPI.feishuTest()}
+      />
+      <DocAppCard
+        title={t('tencentTitle')}
+        desc={t('tencentDesc')}
+        configKey="tencentDocs"
+        fields={tencentFields}
+        tester={() => window.electronAPI.tencentTest()}
+      />
+      <DocAppCard
+        title={t('kingsoftTitle')}
+        desc={t('kingsoftDesc')}
+        configKey="kingsoftDocs"
+        fields={kingsoftFields}
+        tester={() => window.electronAPI.kingsoftTest()}
+      />
+    </>
+  )
+}
+
+/** 浏览器：AI 任务默认浏览器（内置/系统）+ 独立开发浏览器窗口入口 + 清除浏览记录 */
+function BrowserSection() {
+  const { t } = useTranslation('settings')
+  const [url, setUrl] = useState('')
+  /** AI 任务默认浏览器：builtin = 内置浏览器（可自动采集）；system = 系统浏览器（仅打开浏览） */
+  const [browser, setBrowser] = useState<'builtin' | 'system'>('builtin')
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [clearing, setClearing] = useState(false)
+
+  useEffect(() => {
+    window.electronAPI.getConfig().then((c) => {
+      setUrl((c.devBrowserUrl as string | undefined) ?? '')
+      const saved = c.aiDefaultBrowser as string | undefined
+      setBrowser(saved === 'system' ? 'system' : 'builtin')
+    })
+  }, [])
+
+  const open = async () => {
+    const raw = url.trim()
+    if (!raw) return
+    const full = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`
+    setUrl(full)
+    void window.electronAPI.setConfig('devBrowserUrl', full)
+    try {
+      const res = await window.electronAPI.openDevBrowser(full)
+      setMsg({ ok: res.ok, text: res.message })
+    } catch (err) {
+      setMsg({ ok: false, text: t('openFail', { msg: err instanceof Error ? err.message : String(err) }) })
+    }
+  }
+
+  /** 清除内置浏览器保存的浏览数据（Cookies / 本地存储 / 缓存等），登录态将丢失 */
+  const clearBrowserData = async () => {
+    if (!window.confirm(t('clearConfirm'))) return
+    setClearing(true)
+    setMsg(null)
+    try {
+      const res = await window.electronAPI.clearBrowserData()
+      setMsg({ ok: res.ok, text: res.message })
+    } catch (err) {
+      setMsg({ ok: false, text: t('clearFail', { msg: err instanceof Error ? err.message : String(err) }) })
+    } finally {
+      setClearing(false)
+    }
+  }
+
+  return (
+    <Section
+      title={t('browserTitle')}
+      desc={t('browserDesc')}
+    >
+      <div className="settings-gen-row">
         <div className="settings-gen-info">
-          <span className="settings-gen-label">启用内置浏览器</span>
-          <span className="settings-gen-sub">功能就绪后可开启</span>
+          <span className="settings-gen-label">{t('defaultBrowserLabel')}</span>
+          <span className="settings-gen-sub">
+            {browser === 'builtin'
+              ? t('browserBuiltinDesc')
+              : t('browserSystemDesc')}
+          </span>
         </div>
-        <span className="switch" aria-hidden />
+        <div className="segmented">
+          {(['builtin', 'system'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={`segment-item ${browser === m ? 'active' : ''}`}
+              onClick={() => {
+                setBrowser(m)
+                void window.electronAPI.setConfig('aiDefaultBrowser', m)
+              }}
+            >
+              {m === 'builtin' ? t('browser_builtin') : t('browser_system')}
+            </button>
+          ))}
+        </div>
       </div>
+      <div className="settings-gen-row no-border">
+        <div className="settings-gen-info">
+          <span className="settings-gen-label">{t('devBrowserLabel')}</span>
+          <span className="settings-gen-sub">{t('devBrowserDesc')}</span>
+        </div>
+      </div>
+      <div className="browser-open-row">
+        <input
+          className="input"
+          placeholder={t('devUrlPlaceholder')}
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && void open()}
+        />
+        <button className="btn-primary" disabled={!url.trim()} onClick={() => void open()}>
+          {t('openBrowser')}
+        </button>
+      </div>
+      <div className="settings-gen-row">
+        <div className="settings-gen-info">
+          <span className="settings-gen-label">{t('clearLabel')}</span>
+          <span className="settings-gen-sub">
+            {t('clearDesc')}
+          </span>
+        </div>
+        <button className="btn-secondary" disabled={clearing} onClick={() => void clearBrowserData()}>
+          {clearing ? t('clearing') : t('clearLabel')}
+        </button>
+      </div>
+      {msg && <p className={`model-test-msg ${msg.ok ? 'ok' : 'err'}`}>{msg.text}</p>}
     </Section>
   )
 }
 
 /** 关于应用 */
 function AboutSection() {
+  const { t } = useTranslation('settings')
   return (
     <Section>
       <div className="about-hero">
-        <img className="about-logo" src={appIconUrl} alt="AI 走查工具" />
+        <img className="about-logo" src={appIconUrl} alt={t('aboutAlt')} />
         <div className="about-info">
           <div className="about-name-row">
-            <span className="about-name">AI 走查工具</span>
+            <span className="about-name">{t('appName')}</span>
             <span className="about-ver-tag">v{pkg.version}</span>
           </div>
           <p className="settings-desc about-desc">
-            UI 设计走查工具：设计稿与开发截图对比、标注、复验与报告导出。数据全部保存在本机。
+            {t('aboutDesc')}
           </p>
           <div className="about-meta">
             <div className="about-meta-line">
-              <span className="about-meta-label">作者</span>
+              <span className="about-meta-label">{t('author')}</span>
               <a className="settings-link" href="https://quweijia.is-a.dev/" target="_blank" rel="noreferrer">
                 Vic Qu ↗
               </a>
             </div>
             <div className="about-meta-line">
-              <span className="about-meta-label">技术栈</span>
+              <span className="about-meta-label">{t('techStack')}</span>
               <span>Electron · React · TypeScript · Dexie</span>
             </div>
           </div>
@@ -890,25 +1379,137 @@ function AboutSection() {
   )
 }
 
+/** AI 小助手管理：显隐开关 / 悬浮球图标大小 / 助手专用模型（改动即时生效） */
+function AssistantSection() {
+  const { t } = useTranslation('settings')
+  const [visible, setVisible] = useState(true)
+  const [fabSize, setFabSize] = useState(44)
+  const [modelId, setModelId] = useState('')
+  const [models, setModels] = useState<AIModel[]>([])
+  const [defId, setDefId] = useState('')
+
+  useEffect(() => {
+    window.electronAPI.getConfig().then((cfg) => {
+      setVisible((cfg.aiAssistantVisible as boolean | undefined) ?? true)
+      const size = Number(cfg.aiAssistantFabSize)
+      setFabSize(Number.isFinite(size) && size >= 28 && size <= 72 ? size : 44)
+      setModelId((cfg.aiAssistantModelId as string | undefined) ?? '')
+      setModels(((cfg.aiModels as AIModel[] | undefined) ?? []).filter((m) => m.id))
+      setDefId((cfg.aiDefaultModelId as string | undefined) ?? '')
+    })
+  }, [])
+
+  /** 保存后广播：悬浮球监听事件即时刷新显隐与尺寸 */
+  const notifyFab = () => window.dispatchEvent(new CustomEvent('ai-assistant-config-change'))
+
+  return (
+    <Section title={t('assistantTitle')} desc={t('assistantDesc')}>
+      <div className="settings-gen-row">
+        <div className="settings-gen-info">
+          <span className="settings-gen-label">{t('assistantShowLabel')}</span>
+          <span className="settings-gen-sub">{t('assistantShowDesc')}</span>
+        </div>
+        <button
+          type="button"
+          className={`switch ${visible ? 'on' : ''}`}
+          onClick={() => {
+            const next = !visible
+            setVisible(next)
+            void window.electronAPI.setConfig('aiAssistantVisible', next).then(notifyFab)
+          }}
+        />
+      </div>
+      <div className="settings-gen-row">
+        <div className="settings-gen-info">
+          <span className="settings-gen-label">{t('assistantSizeLabel')}</span>
+          <span className="settings-gen-sub">{t('assistantSizeDesc', { size: fabSize })}</span>
+        </div>
+        <input
+          type="range"
+          min={28}
+          max={72}
+          step={2}
+          value={fabSize}
+          style={{ width: 200, accentColor: 'var(--primary)' }}
+          onChange={(e) => setFabSize(Number(e.target.value))}
+          onPointerUp={() => {
+            void window.electronAPI.setConfig('aiAssistantFabSize', fabSize).then(notifyFab)
+          }}
+          onKeyUp={() => {
+            void window.electronAPI.setConfig('aiAssistantFabSize', fabSize).then(notifyFab)
+          }}
+        />
+      </div>
+      <div className="settings-gen-row">
+        <div className="settings-gen-info">
+          <span className="settings-gen-label">{t('assistantModelLabel')}</span>
+          <span className="settings-gen-sub">{t('assistantModelDesc')}</span>
+        </div>
+        <USelect
+          value={modelId}
+          onChange={(v) => {
+            setModelId(v)
+            void window.electronAPI.setConfig('aiAssistantModelId', v)
+          }}
+          options={[
+            { value: '', label: t('assistantModelFollow', { name: models.find((m) => m.id === defId)?.name ?? '—' }) },
+            ...models.map((m) => ({ value: m.id, label: m.name }))
+          ]}
+        />
+      </div>
+      <div className="settings-gen-row">
+        <div className="settings-gen-info">
+          <span className="settings-gen-label">{t('assistantClearLabel')}</span>
+          <span className="settings-gen-sub">{t('assistantClearDesc')}</span>
+        </div>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => {
+            if (!window.confirm(t('assistantClearConfirm'))) return
+            void db.assistantMessages.clear().then(() => {
+              // 通知打开中的助手面板刷新当前会话
+              window.dispatchEvent(new CustomEvent('ai-assistant-history-clear'))
+            })
+          }}
+        >
+          {t('assistantClearBtn')}
+        </button>
+      </div>
+    </Section>
+  )
+}
+
 export default function Settings() {
+  const { t } = useTranslation('settings')
   const navigate = useNavigate()
+  const location = useLocation()
   const { tab } = useSettingsStore()
+
+  /** 来源页名称（顶栏设置按钮导航时写入），顶部返回标题跟随显示 */
+  const from = (location.state as { from?: string } | null)?.from ?? t('pageList')
+  const goBack = () => {
+    if (window.history.length > 1) navigate(-1)
+    else navigate('/')
+  }
 
   return (
     <div className="page">
       <div className="page-header">
         <div className="settings-head-left">
-          <button type="button" className="settings-close" title="返回项目列表" onClick={() => navigate('/')}>
+          <button type="button" className="settings-close" title={t('backTo', { from })} onClick={goBack}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M15 18l-6-6 6-6" />
             </svg>
           </button>
-          <h1>返回项目</h1>
+          <h1>{t('backTo', { from })}</h1>
         </div>
       </div>
 
       {tab === 'models' && <ModelsSection />}
+      {tab === 'assistant' && <AssistantSection />}
       {tab === 'general' && <GeneralSection />}
+      {tab === 'tolerance' && <ToleranceSection />}
       {tab === 'mcp' && <McpSection />}
       {tab === 'skills' && <SkillsSection />}
       {tab === 'auth' && <AuthSection />}

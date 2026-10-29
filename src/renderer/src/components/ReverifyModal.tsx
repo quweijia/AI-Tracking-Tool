@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { db, touchPage, CATEGORY_LABELS, Issue, SEVERITY_LABELS } from '../db'
+import { useTranslation } from 'react-i18next'
+import { db, touchPage, Issue } from '../db'
 
 interface Props {
   issue: Issue
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export default function ReverifyModal({ issue, oldScreenshotUrl, onClose }: Props) {
+  const { t } = useTranslation('reverifyModal')
   const [fixPath, setFixPath] = useState(issue.fixScreenshotPath ?? '')
   const [fixUrl, setFixUrl] = useState('')
   const [note, setNote] = useState(issue.fixNote ?? '')
@@ -61,28 +63,28 @@ export default function ReverifyModal({ issue, oldScreenshotUrl, onClose }: Prop
   return (
     <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal modal-wide">
-        <h3>复验问题</h3>
+        <h3>{t('title')}</h3>
         <div className="reverify-issue-meta">
           <span className={`severity-badge severity-${issue.severity}`}>
-            {SEVERITY_LABELS[issue.severity]}
+            {t(`severity_${issue.severity}`)}
           </span>
-          <span className="meta-cat">{CATEGORY_LABELS[issue.category]}</span>
+          <span className="meta-cat">{t(`category_${issue.category}`)}</span>
           <span className="meta-desc">{issue.description}</span>
         </div>
 
         <div className="reverify-upload">
           <button className="btn-secondary" onClick={pickImage} disabled={picking}>
-            {picking ? '选择中...' : fixUrl ? '重新选择修复后截图' : '选择修复后截图'}
+            {picking ? t('picking') : fixUrl ? t('reselectFixShot') : t('selectFixShot')}
           </button>
-          {fixUrl && <img src={fixUrl} alt="修复后缩略图" className="verify-thumb" />}
+          {fixUrl && <img src={fixUrl} alt={t('fixThumbAlt')} className="verify-thumb" />}
         </div>
 
         {fixUrl && !oldScreenshotUrl && (
           <div className="verify-wrap">
             <div className="verify-scroll">
-              <img src={fixUrl} alt="修复后截图" className="verify-img" draggable={false} />
+              <img src={fixUrl} alt={t('fixShotAlt')} className="verify-img" draggable={false} />
             </div>
-            <span className="verify-tag tag-right">修复后</span>
+            <span className="verify-tag tag-right">{t('afterFixTag')}</span>
           </div>
         )}
 
@@ -90,18 +92,18 @@ export default function ReverifyModal({ issue, oldScreenshotUrl, onClose }: Prop
           <>
             <div className="verify-wrap">
               <div className="verify-scroll">
-                <img src={oldScreenshotUrl!} alt="修复前截图" className="verify-img" draggable={false} />
+                <img src={oldScreenshotUrl!} alt={t('preFixShotAlt')} className="verify-img" draggable={false} />
                 <img
                   src={fixUrl}
-                  alt="修复后截图"
+                  alt={t('fixShotAlt')}
                   className="verify-img verify-new"
                   draggable={false}
                   style={{ clipPath: `inset(0 0 0 ${slider}%)` }}
                 />
               </div>
               <div className="verify-divider" style={{ left: `${slider}%` }} />
-              <span className="verify-tag tag-left">修复前</span>
-              <span className="verify-tag tag-right">修复后</span>
+              <span className="verify-tag tag-left">{t('beforeFixTag')}</span>
+              <span className="verify-tag tag-right">{t('afterFixTag')}</span>
             </div>
             <input
               type="range"
@@ -114,30 +116,30 @@ export default function ReverifyModal({ issue, oldScreenshotUrl, onClose }: Prop
           </>
         )}
 
-        <label className="field-label">复验备注（可选）</label>
+        <label className="field-label">{t('noteLabel')}</label>
         <textarea
           className="input"
           rows={2}
-          placeholder="记录复验说明，例如：间距已改对，但字号仍偏小"
+          placeholder={t('notePlaceholder')}
           value={note}
           onChange={(e) => setNote(e.target.value)}
         />
 
         <div className="modal-actions">
           <button className="btn-secondary" onClick={onClose}>
-            取消
+            {t('cancel')}
           </button>
           <span className="modal-spacer" />
-          <button className="btn-danger" onClick={() => submit(false)} title="判定未通过，状态回到「待修复」">
-            未通过（打回）
+          <button className="btn-danger" onClick={() => submit(false)} title={t('failTitle')}>
+            {t('failButton')}
           </button>
           <button
             className="btn-primary"
             disabled={!fixUrl}
-            title={fixUrl ? '判定已修复' : '需先上传修复后截图'}
+            title={fixUrl ? t('passTitle') : t('passTitleNeedShot')}
             onClick={() => submit(true)}
           >
-            已修复（通过）
+            {t('passButton')}
           </button>
         </div>
       </div>

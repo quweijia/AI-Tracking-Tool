@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 export interface USelectOption {
   value: string
@@ -23,6 +24,7 @@ interface Props {
  * 弹层用 fixed 定位，避免被抽屉/弹窗的 overflow 裁剪，空间不足时自动向上翻转。
  */
 export default function USelect({ value, onChange, options, className, disabled, placeholder, title }: Props) {
+  const { t } = useTranslation('uSelect')
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState<{ left: number; top: number; minWidth: number; up: boolean } | null>(null)
   const wrapRef = useRef<HTMLSpanElement>(null)
@@ -90,7 +92,7 @@ export default function USelect({ value, onChange, options, className, disabled,
         onClick={toggle}
         title={title ?? current?.label}
       >
-        <span className={`u-select-label${current ? '' : ' placeholder'}`}>{current?.label ?? placeholder ?? '请选择'}</span>
+        <span className={`u-select-label${current ? '' : ' placeholder'}`}>{current?.label ?? placeholder ?? t('select')}</span>
         <svg
           className="u-select-chevron"
           width="12"

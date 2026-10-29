@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   db,
   genId,
@@ -15,9 +16,11 @@ import {
   TargetImage
 } from '../db'
 import USelect from '../components/USelect'
+import SourceBadge from '../components/SourceBadge'
 import ReverifyModal from '../components/ReverifyModal'
 
 export default function IssueList() {
+  const { t } = useTranslation('issueList')
   const { projectId, pageId } = useParams<{ projectId: string; pageId: string }>()
   const navigate = useNavigate()
   const issues = useLiveQuery(
@@ -32,6 +35,11 @@ export default function IssueList() {
   const [targetImage, setTargetImage] = useState<TargetImage>('screenshot')
   const [reverifyIssue, setReverifyIssue] = useState<Issue | null>(null)
   const [oldScreenshotUrl, setOldScreenshotUrl] = useState<string | null>(null)
+
+  /** 展示映射：存库值为枚举 key，展示文案经语言包转换 */
+  const catLabel = (c: Category) => t(`cat_${c}`)
+  const sevLabel = (s: Severity) => t(`sev_${s}`)
+  const statusLabel = (s: IssueStatus) => t(`status_${s}`)
 
   const openReverify = async (issue: Issue) => {
     setReverifyIssue(issue)
@@ -81,12 +89,12 @@ export default function IssueList() {
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M15 18l-6-6 6-6" />
             </svg>
-            返回对比
+            {t('backToCompare')}
           </Link>
-          <h1>问题清单与复验</h1>
+          <h1>{t('title')}</h1>
         </div>
         <button className="btn-primary" onClick={() => setShowAdd(!showAdd)}>
-          添加问题
+          {t('addIssue')}
         </button>
       </div>
 
@@ -94,33 +102,33 @@ export default function IssueList() {
         <div className="card form-row">
           <input
             className="input grow"
-            placeholder="问题描述"
+            placeholder={t('descriptionPlaceholder')}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
           />
           <USelect
             value={category}
             onChange={(v) => setCategory(v as Category)}
-            options={(Object.keys(CATEGORY_LABELS) as Category[]).map((k) => ({ value: k, label: CATEGORY_LABELS[k] }))}
+            options={(Object.keys(CATEGORY_LABELS) as Category[]).map((k) => ({ value: k, label: catLabel(k) }))}
           />
           <USelect
             value={severity}
             onChange={(v) => setSeverity(v as Severity)}
-            options={(Object.keys(SEVERITY_LABELS) as Severity[]).map((k) => ({ value: k, label: SEVERITY_LABELS[k] }))}
+            options={(Object.keys(SEVERITY_LABELS) as Severity[]).map((k) => ({ value: k, label: sevLabel(k) }))}
           />
           <USelect
             value={targetImage}
             onChange={(v) => setTargetImage(v as TargetImage)}
             options={[
-              { value: 'screenshot', label: '开发截图' },
-              { value: 'design', label: '设计稿' }
+              { value: 'screenshot', label: t('devScreenshot') },
+              { value: 'design', label: t('design') }
             ]}
           />
           <button className="btn-primary" onClick={addIssue} disabled={!description.trim()}>
-            添加
+            {t('add')}
           </button>
           <button className="btn-secondary" onClick={() => setShowAdd(false)}>
-            取消
+            {t('cancel')}
           </button>
         </div>
       )}
@@ -130,26 +138,36 @@ export default function IssueList() {
           <thead>
             <tr>
               <th>#</th>
-              <th>分类</th>
-              <th>严重度</th>
-              <th>描述</th>
-              <th>标注图</th>
-              <th>状态</th>
-              <th>复验</th>
+              <th>{t('colCategory')}</th>
+              <th>{t('colSeverity')}</th>
+              <th>{t('colSource')}</th>
+              <th>{t('colDescription')}</th>
+              <th>{t('colTargetImage')}</th>
+              <th>{t('colStatus')}</th>
+              <th>{t('colReverify')}</th>
             </tr>
           </thead>
           <tbody>
             {sorted.map((issue, idx) => (
               <tr key={issue.id}>
                 <td>{idx + 1}</td>
-                <td>{CATEGORY_LABELS[issue.category]}</td>
+                <td>{catLabel(issue.category)}</td>
                 <td>
                   <span className={`severity-badge severity-${issue.severity}`}>
-                    {SEVERITY_LABELS[issue.severity]}
+                    {sevLabel(issue.severity)}
                   </span>
                 </td>
+                <td className="issue-source">
+                  {(issue.source === 'structured' ||
+                    issue.source === 'visual' ||
+                    issue.source === 'spec' ||
+                    issue.source === 'element' ||
+                    issue.source === 'a11y') && (
+                    <SourceBadge source={issue.source} />
+                  )}
+                </td>
                 <td className="issue-desc">{issue.description}</td>
-                <td>{issue.targetImage === 'design' ? '设计稿' : '截图'}</td>
+                <td>{issue.targetImage === 'design' ? t('design') : t('screenshot')}</td>
                 <td>
                   <USelect
                     className={`status-select status-${issue.status}`}
@@ -157,35 +175,35 @@ export default function IssueList() {
                     onChange={(v) => updateStatus(issue, v as IssueStatus)}
                     options={(Object.keys(ISSUE_STATUS_LABELS) as IssueStatus[]).map((k) => ({
                       value: k,
-                      label: ISSUE_STATUS_LABELS[k]
+                      label: statusLabel(k)
                     }))}
                   />
                 </td>
                 <td>
-                  {issue.fixStatus === 'passed' && <span className="fix-badge pass">已通过</span>}
+                  {issue.fixStatus === 'passed' && <span className="fix-badge pass">{t('passed')}</span>}
                   {issue.fixStatus === 'failed' && (
                     <span className="fix-badge fail">
-                      未通过
+                      {t('failed')}
                       {(issue.reverifyCount ?? 0) > 1 ? ` ×${issue.reverifyCount}` : ''}
                     </span>
                   )}
                   <button className="btn-text" onClick={() => openReverify(issue)}>
-                    复验
+                    {t('reverify')}
                   </button>
                   <button
                     className="btn-text"
                     onClick={() => navigate(`/project/${projectId}/page/${pageId}?issue=${issue.id}`)}
-                    title="跳转到对比页查看标注框"
+                    title={t('locateTip')}
                   >
-                    定位
+                    {t('locate')}
                   </button>
                 </td>
               </tr>
             ))}
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={7} className="table-empty">
-                  {issues === undefined ? '加载中...' : '还没有问题记录，可在对比页框选标注或点击右上角「添加问题」'}
+                <td colSpan={8} className="table-empty">
+                  {issues === undefined ? t('loading') : t('empty')}
                 </td>
               </tr>
             )}

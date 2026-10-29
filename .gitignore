@@ -8,3 +8,4 @@ release/
 .data/
 *.log
 .DS_Store
+resources/gates/node_modules/

@@ -1,0 +1,26 @@
+/** 新建 / 编辑项目弹窗文案 */
+export default {
+  editTitle: '编辑项目',
+  createTitle: '新建项目',
+  logoLabel: '项目 Logo（可选，上传后可裁剪调整）',
+  logoReplaceTitle: '点击重新上传并裁剪 Logo',
+  logoPickTitle: '点击选择 Logo 图片',
+  logoColorLabel: '文字 Logo 底色',
+  nameLabel: '项目名称',
+  namePlaceholder: '如：XX App、官网、数据平台',
+  duplicateMsg: '已存在同名项目，请重新命名，或直接打开该项目',
+  openProject: '打开该项目',
+  platformLabel: '适用端类型（可多选）',
+  platform_h5: '移动端',
+  platform_pc: 'PC 端',
+  platform_dashboard: '可视化大屏',
+  platform_electron: 'Electron 桌面',
+  specBindLabel: '绑定设计规范（按端分类各绑一套，走查时自动套用）',
+  specBindNone: '不绑定',
+  specBindEmpty: '当前无可用规范，可到「设计规范」页创建并同步',
+  deleteProject: '删除项目',
+  deleteConfirm: '确定删除项目「{{name}}」吗？\n将同时删除其下所有版本、页面、问题记录与图片文件，删除后不可恢复。',
+  cancel: '取消',
+  save: '保存',
+  create: '确认创建'
+}

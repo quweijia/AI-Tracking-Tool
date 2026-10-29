@@ -1,4 +1,5 @@
-import { Platform, PLATFORM_LABELS } from '../db'
+import { useTranslation } from 'react-i18next'
+import { Platform } from '../db'
 
 /** 平台图标：手机 / 显示器 / 可视化大屏 / 桌面应用窗口（内联 SVG，随文字颜色） */
 export function PlatformIcon({ platform, size = 13 }: { platform: Platform; size?: number }) {
@@ -49,10 +50,11 @@ export function PlatformIcon({ platform, size = 13 }: { platform: Platform; size
 
 /** 图标 + 平台文案标签（不同平台类型做颜色区分） */
 export function PlatformBadge({ platform }: { platform: Platform }) {
+  const { t } = useTranslation('platformBadge')
   return (
     <span className={`badge platform-badge platform-${platform}`}>
       <PlatformIcon platform={platform} />
-      {PLATFORM_LABELS[platform]}
+      {t(`platform_${platform}`)}
     </span>
   )
 }

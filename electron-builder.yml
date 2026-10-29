@@ -13,6 +13,9 @@ files:
   - '!release'
   - '!*.yml'
   - '!*.md'
+  # 客观走查门（gates）vendor 随包分发，配合 asarUnpack 使用
+  - resources/**
+  - '!resources/gates/node_modules/**'
 asarUnpack:
   - resources/**
 mac:
@@ -20,6 +23,26 @@ mac:
   # 未申请开发者证书，跳过签名（首次打开需右键 → 打开）
   identity: null
   category: public.app-category.developer-tools
+  artifactName: ${productName}-${version}-${arch}.${ext}
   target:
     - target: dmg
+      arch:
+        - x64
+        - arm64
     - target: zip
+      arch:
+        - x64
+        - arm64
+win:
+  icon: build/icon.png
+  # 未签名，Windows 安装/运行时可能弹出 SmartScreen 提示（选择「仍要运行」即可）
+  artifactName: AI-Walkthrough-Setup-${version}.${ext}
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false

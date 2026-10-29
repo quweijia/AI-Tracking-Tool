@@ -38,20 +38,41 @@ UI 设计走查（Visual QA）桌面应用，面向设计/前端协作场景：�
 | 渲染层 | React 18 + TypeScript + react-router（HashRouter）+ zustand |
 | 数据 | Dexie 4（IndexedDB），标注坐标 0~1 归一化存储 |
 | 标注层 | SVG 覆盖方案（双图独立标注） |
-| 打包 | electron-builder 26（dmg + zip） |
+| 打包 | electron-builder 26（mac dmg/zip 双架构 + win nsis） |
+
+## 下载安装（发行包）
+
+安装包在 macOS（Intel / Apple Silicon）与 Windows（x64）三端分别构建，产物输出至 `release/{version}/`：
+
+| 平台 | 产物 | 说明 |
+|---|---|---|
+| macOS Intel | `AI 走查工具-{version}-x64.dmg` / `.zip` | Intel 芯片 |
+| macOS Apple Silicon | `AI 走查工具-{version}-arm64.dmg` / `.zip` | M1/M2/M3/M4 系列 |
+| Windows x64 | `AI-Walkthrough-Setup-{version}.exe` | NSIS 向导式安装，可选安装目录 |
+
+未申请代码签名证书：
+
+- **macOS** 首次打开若提示「无法验证开发者」，右键 App → 「打开」，或前往 系统设置 → 隐私与安全性 → 仍要打开
+- **Windows** 安装/运行时若弹出 SmartScreen 蓝色提示，点击「更多信息 → 仍要运行」
+
+打包版用户数据独立存放（macOS `~/Library/Application Support/AI 走查工具`、Windows `%APPDATA%/AI 走查工具`），不污染开发目录。
 
 ## 快速开始
 
 ```bash
 # 环境要求：Node.js 20+
 
-npm install        # 安装依赖
-npm run dev        # 启动开发模式（主进程改动需手动重启）
-npm run typecheck  # 类型检查（node + web 两套 tsconfig）
-npm run build:mac  # typecheck + 构建 + electron-builder 打包（dmg + zip）
+npm install            # 安装依赖
+npm run dev            # 启动开发模式（主进程改动需手动重启）
+npm run typecheck      # 类型检查（node + web 两套 tsconfig）
+npm run build:mac      # typecheck + 构建 + 打包 macOS 双架构（x64 + arm64）
+npm run build:mac:intel  # 仅打包 macOS Intel（x64）
+npm run build:mac:arm    # 仅打包 macOS Apple Silicon（arm64）
+npm run build:win      # typecheck + 构建 + 打包 Windows x64（NSIS 安装器）
+npm run build:all      # 一次性打包 macOS 双架构 + Windows x64
 ```
 
-打包产物输出至 `release/{version}/`；打包版用户数据独立存放于系统 `~/Library/Application Support/AI 走查工具`。
+> 交叉打包说明：macOS 上可直接交叉构建 Windows NSIS 安装器与另一架构的 macOS 包（本项目无 native 模块）。「客观走查门」为可选增强能力，依赖运行环境自备 `python3` 与 Playwright Chromium（`npx playwright install chromium`），缺省时对应 gate 会明确报「无法测量」而非误报通过。
 
 ## 数据与隐私
 

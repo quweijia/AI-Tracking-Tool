@@ -1,0 +1,26 @@
+/** New / edit project modal strings */
+export default {
+  editTitle: 'Edit project',
+  createTitle: 'New project',
+  logoLabel: 'Project logo (optional, crop after upload)',
+  logoReplaceTitle: 'Click to re-upload and crop the logo',
+  logoPickTitle: 'Click to choose a logo image',
+  logoColorLabel: 'Text logo background color',
+  nameLabel: 'Project name',
+  namePlaceholder: 'e.g. XX App, Official website, Data platform',
+  duplicateMsg: 'A project with the same name already exists. Rename it, or open the existing project',
+  openProject: 'Open project',
+  platformLabel: 'Platforms (multiple allowed)',
+  platform_h5: 'Mobile',
+  platform_pc: 'PC',
+  platform_dashboard: 'Dashboard',
+  platform_electron: 'Electron Desktop',
+  specBindLabel: 'Design specs (one per platform category, applied automatically during walkthrough)',
+  specBindNone: 'None',
+  specBindEmpty: 'No specs available yet. Create and sync one on the "Design Specs" page.',
+  deleteProject: 'Delete project',
+  deleteConfirm: 'Delete project "{{name}}"?\nAll its versions, pages, issues and image files will be deleted as well. This cannot be undone.',
+  cancel: 'Cancel',
+  save: 'Save',
+  create: 'Create'
+}

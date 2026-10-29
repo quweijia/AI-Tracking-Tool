@@ -18,6 +18,7 @@ interface FeishuReportPayload {
     title: string
     severityLabel: string
     categoryLabel: string
+    sourceLabel: string
     targetLabel: string
     statusLabel: string
     suggestion?: { current: string; fix: string; properties?: string }
@@ -359,6 +360,13 @@ async function createIssueBitable(
               }
             },
             {
+              field_name: '来源',
+              type: 3,
+              property: {
+                options: [option('结构化比对', 24), option('视觉比对', 26), option('手动标注', 0)]
+              }
+            },
+            {
               field_name: '状态',
               type: 3,
               property: {
@@ -387,6 +395,7 @@ async function createIssueBitable(
         问题描述: i.title,
         严重度: i.severityLabel,
         分类: i.categoryLabel,
+        来源: i.sourceLabel,
         状态: i.statusLabel,
         标注图: i.targetLabel
       }
@@ -552,6 +561,7 @@ function registerFeishuHandlers(): void {
                     { content: '问题描述', bold: true },
                     { content: '严重度', bold: true },
                     { content: '分类', bold: true },
+                    { content: '来源', bold: true },
                     { content: '标注图', bold: true },
                     { content: '状态', bold: true }
                   ],
@@ -560,18 +570,21 @@ function registerFeishuHandlers(): void {
                     { content: i.title },
                     { content: i.severityLabel },
                     { content: i.categoryLabel },
+                    { content: i.sourceLabel },
                     { content: i.targetLabel },
                     { content: i.statusLabel }
                   ])
                 ],
                 10,
-                [52, 300, 76, 108, 84, 160]
+                [48, 252, 68, 96, 88, 72, 156]
               )
             } catch (err) {
               warnings.push('明细表格创建失败，已用文本展示')
               const fallback: Block[] = payload.issues.flatMap((i) => [
                 textBlock(`${i.no}. ${i.title}`, true),
-                textBlock(`严重度：${i.severityLabel}　分类：${i.categoryLabel}　标注图：${i.targetLabel}　状态：${i.statusLabel}`)
+                textBlock(
+                  `严重度：${i.severityLabel}　分类：${i.categoryLabel}　来源：${i.sourceLabel}　标注图：${i.targetLabel}　状态：${i.statusLabel}`
+                )
               ])
               await appendTextBlocks(token, docId, fallback)
             }
@@ -628,6 +641,20 @@ function registerFeishuHandlers(): void {
           } catch (err) {
             warnings.push(`HTML 报告附件上传失败：${err instanceof Error ? err.message : String(err)}`)
           }
+        }
+
+        // 8. 开放编辑权限：组织内获得链接的人可编辑（失败不阻塞文档，仅提示）
+        try {
+          await feishuJson(
+            token,
+            `${FEISHU_BASE}/drive/v1/permissions/${docId}/public?type=docx`,
+            { link_share_entity: 'tenant_editable' },
+            'PATCH'
+          )
+        } catch (err) {
+          warnings.push(
+            `已创建文档，但开放团队编辑权限失败（${err instanceof Error ? err.message : String(err)}），可在文档右上角「分享」手动设置「组织内获得链接的人可编辑」（需在飞书开放平台开通 drive:permission 权限）`
+          )
         }
 
         const url = `https://feishu.cn/docx/${docId}`

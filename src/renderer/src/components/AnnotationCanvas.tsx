@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { Issue, TargetImage, AnnotationShape } from '../db'
 
 export interface NormalizedRect {
@@ -32,6 +33,8 @@ interface Props {
   targetImage: TargetImage
   /** 需要高亮闪烁的标注 id（问题清单点击卡片时定位画布标注） */
   flashId?: string | null
+  /** 聚焦模式：只渲染该标注，其余隐藏（问题清单点击卡片时双图同步聚焦） */
+  focusId?: string | null
   /** 叠加模式图层：铺满叠加画布，自带图片隐藏（仅保留取色/测距所需像素信息） */
   overlay?: boolean
   /** 按住空格平移中：暂停绘制与标注拖拽，整块画布交给画布平移 */
@@ -60,9 +63,11 @@ export default function AnnotationCanvas({
   onEdit,
   targetImage,
   flashId,
+  focusId,
   overlay,
   spacePan
 }: Props) {
+  const { t } = useTranslation('annotationCanvas')
   const svgRef = useRef<SVGSVGElement>(null)
   const imgRef = useRef<HTMLImageElement>(null)
   /** 取样用的离屏画布缓存（按 img.src 失效） */
@@ -349,11 +354,14 @@ export default function AnnotationCanvas({
         </defs>
 
         {issues.map((issue, idx) => {
+          // 聚焦模式：只显示当前聚焦的标注，其余隐藏
+          if (focusId && issue.id !== focusId) return null
           const shape = issue.shape ?? 'rect'
           const num = noOf ? noOf(issue) : idx + 1
           const statusCls = issue.status === 'fixed' ? 'status-fixed' : ''
           const sevCls = `severity-${issue.severity}`
           const flashCls = issue.id === flashId ? ' issue-flash' : ''
+          const focusCls = issue.id === focusId ? ' issue-focus' : ''
           // 自定义颜色：仅未修复状态生效（已修复保持绿色状态色）
           const useCustom = !!issue.color && issue.status !== 'fixed'
           // 拖拽移动中：用临时坐标覆盖原位置
@@ -364,7 +372,7 @@ export default function AnnotationCanvas({
               <g key={issue.id}>
                 <circle className="anno-point-hit" cx={pct(R.x)} cy={pct(R.y)} r={16} onMouseDown={editHandler(issue)} />
                 <circle
-                  className={`anno-point ${sevCls} ${statusCls}${flashCls}`}
+                  className={`anno-point ${sevCls} ${statusCls}${flashCls}${focusCls}`}
                   cx={pct(R.x)}
                   cy={pct(R.y)}
                   r={9}
@@ -393,7 +401,7 @@ export default function AnnotationCanvas({
             return (
               <g key={issue.id}>
                 <line
-                  className={`anno-arrow-line ${sevCls} ${statusCls}${flashCls}`}
+                  className={`anno-arrow-line ${sevCls} ${statusCls}${flashCls}${focusCls}`}
                   x1={pct(R.x)}
                   y1={pct(R.y)}
                   x2={pct(ex)}
@@ -432,7 +440,7 @@ export default function AnnotationCanvas({
             return (
               <text
                 key={issue.id}
-                className={`anno-text ${sevCls} ${statusCls}${flashCls}`}
+                className={`anno-text ${sevCls} ${statusCls}${flashCls}${focusCls}`}
                 x={pct(R.x)}
                 y={pct(R.y)}
                 onMouseDown={editHandler(issue)}
@@ -453,7 +461,7 @@ export default function AnnotationCanvas({
             return (
               <g key={issue.id}>
                 <line
-                  className={`anno-measure-line ${sevCls} ${statusCls}${flashCls}`}
+                  className={`anno-measure-line ${sevCls} ${statusCls}${flashCls}${focusCls}`}
                   x1={pct(R.x)}
                   y1={pct(R.y)}
                   x2={pct(ex)}
@@ -462,7 +470,7 @@ export default function AnnotationCanvas({
                   style={useCustom ? { stroke: issue.color! } : undefined}
                 />
                 <circle
-                  className={`anno-measure-dot ${statusCls}${flashCls}`}
+                  className={`anno-measure-dot ${statusCls}${flashCls}${focusCls}`}
                   cx={pct(R.x)}
                   cy={pct(R.y)}
                   r={3.5}
@@ -470,7 +478,7 @@ export default function AnnotationCanvas({
                   style={useCustom ? { fill: issue.color! } : undefined}
                 />
                 <circle
-                  className={`anno-measure-dot ${statusCls}${flashCls}`}
+                  className={`anno-measure-dot ${statusCls}${flashCls}${focusCls}`}
                   cx={pct(ex)}
                   cy={pct(ey)}
                   r={3.5}
@@ -489,7 +497,7 @@ export default function AnnotationCanvas({
                   {num}
                 </text>
                 <text
-                  className={`anno-measure-label ${statusCls}${flashCls}`}
+                  className={`anno-measure-label ${statusCls}${flashCls}${focusCls}`}
                   x={pct(mx)}
                   y={pct(my)}
                   dx={vertical ? 8 : 0}
@@ -514,9 +522,13 @@ export default function AnnotationCanvas({
           }
 
           if (shape === 'picker') {
-            const hasPair = !!(issue.sampleA && issue.sampleB)
+            // 按画布类型只显示对应色值：设计稿显示 sampleA，开发截图显示 sampleB
+            const hexValue = targetImage === 'design' ? issue.sampleA : issue.sampleB
+            const hexLabel = targetImage === 'design' ? t('pickerLabelDesign', { hex: hexValue }) : t('pickerLabelShot', { hex: hexValue })
+            const displayText = hexValue ? hexLabel : (issue.description.length > 40 ? `${issue.description.slice(0, 40)}…` : issue.description)
             return (
               <g key={issue.id}>
+                {/* 大热区：点击打开编辑弹窗 */}
                 <circle
                   className={`anno-point-hit`}
                   cx={pct(R.x)}
@@ -524,41 +536,31 @@ export default function AnnotationCanvas({
                   r={18}
                   onMouseDown={editHandler(issue)}
                 />
-                {/* 取样点色块：双取样时为设计稿色，旁边标注两个色值 */}
+                {/* 取样点色块 */}
                 <circle
-                  className={`anno-pick-chip ${statusCls}${flashCls}`}
+                  className={`anno-pick-chip ${statusCls}${flashCls}${focusCls}`}
                   cx={pct(R.x)}
                   cy={pct(R.y)}
                   r={7}
                   pointerEvents="none"
                   stroke="#ffffff"
                   strokeWidth={1.5}
-                  style={{ fill: issue.sampleA || issue.sampleB || issue.color || '#3b82f6' }}
+                  style={{ fill: hexValue || issue.color || (targetImage === 'design' ? '#3b82f6' : '#ef4444') }}
                 />
+                {/* 颜色文字标签：可点击打开详情 */}
                 <text
-                  className={`anno-pick-label ${statusCls}${flashCls}`}
+                  className={`anno-pick-label ${statusCls}${flashCls}${focusCls}`}
                   x={pct(R.x)}
                   y={pct(R.y)}
                   dx={11}
-                  dy={hasPair ? -9 : 0}
+                  dy={0}
                   dominantBaseline="central"
-                  pointerEvents="none"
+                  style={{ cursor: 'pointer' }}
+                  pointerEvents="auto"
+                  onMouseDown={editHandler(issue)}
                 >
-                  {issue.sampleA ? `设计 ${issue.sampleA}` : issue.sampleB ? `开发 ${issue.sampleB}` : issue.description}
+                  {displayText}
                 </text>
-                {hasPair && (
-                  <text
-                    className={`anno-pick-label ${statusCls}${flashCls}`}
-                    x={pct(R.x)}
-                    y={pct(R.y)}
-                    dx={11}
-                    dy={9}
-                    dominantBaseline="central"
-                    pointerEvents="none"
-                  >
-                    {`开发 ${issue.sampleB}`}
-                  </text>
-                )}
               </g>
             )
           }
@@ -567,7 +569,7 @@ export default function AnnotationCanvas({
           return (
             <g key={issue.id}>
               <rect
-                className={`anno-box ${sevCls} ${issue.isAISuggested && !issue.aiConfirmed ? 'ai-candidate' : ''} ${statusCls}${flashCls}`}
+                className={`anno-box ${sevCls} ${issue.isAISuggested && !issue.aiConfirmed ? 'ai-candidate' : ''} ${statusCls}${flashCls}${focusCls}`}
                 x={pct(R.x)}
                 y={pct(R.y)}
                 width={pct(R.width)}

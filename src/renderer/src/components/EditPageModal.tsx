@@ -1,19 +1,25 @@
 import { useEffect, useState } from 'react'
-import { WalkthroughPage, Platform, PLATFORM_LABELS } from '../db'
-import USelect from './USelect'
+import { useTranslation } from 'react-i18next'
+import { WalkthroughPage, Platform } from '../db'
+import { PlatformIcon } from './PlatformBadge'
+
+/** 全部端类型（与 PLATFORM_LABELS 的 key 一致，展示文案走 editPageModal ns 的 platform_* key） */
+const PLATFORMS: Platform[] = ['h5', 'pc', 'dashboard', 'electron']
 
 interface Props {
   page: WalkthroughPage
-  /** 保存编辑后的页面信息（figmaUrl 传 undefined 表示清空） */
-  onSave: (fields: { pageName: string; platform: Platform; figmaUrl?: string }) => void
+  /** 保存编辑后的页面信息（figmaUrl/devUrl 传 undefined 表示清空） */
+  onSave: (fields: { pageName: string; platform: Platform; figmaUrl?: string; devUrl?: string }) => void
   onCancel: () => void
 }
 
-/** 编辑走查页面基本信息：页面名称、端类型、设计稿 Figma 链接 */
+/** 编辑走查页面基本信息：页面名称、端类型、设计稿 Figma 链接、开发环境页面 URL */
 export default function EditPageModal({ page, onSave, onCancel }: Props) {
+  const { t } = useTranslation('editPageModal')
   const [pageName, setPageName] = useState(page.pageName)
   const [platform, setPlatform] = useState<Platform>(page.platform)
   const [figmaUrl, setFigmaUrl] = useState(page.figmaUrl ?? '')
+  const [devUrl, setDevUrl] = useState(page.devUrl ?? '')
 
   // Esc 关闭
   useEffect(() => {
@@ -29,52 +35,73 @@ export default function EditPageModal({ page, onSave, onCancel }: Props) {
   const handleSave = () => {
     if (!canSave) return
     // 未带协议时自动补 https://，留空表示清空链接
-    const trimmed = figmaUrl.trim()
-    const normalized =
-      trimmed && !/^https?:\/\//i.test(trimmed) ? `https://${trimmed}` : trimmed
+    const normalize = (raw: string): string => {
+      const trimmed = raw.trim()
+      return trimmed && !/^https?:\/\//i.test(trimmed) ? `https://${trimmed}` : trimmed
+    }
+    const fUrl = normalize(figmaUrl)
+    const dUrl = normalize(devUrl)
     onSave({
       pageName: pageName.trim(),
       platform,
-      figmaUrl: normalized || undefined
+      figmaUrl: fUrl || undefined,
+      devUrl: dUrl || undefined
     })
   }
 
   return (
     <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
       <div className="modal">
-        <h3>编辑页面信息</h3>
+        <h3>{t('title')}</h3>
 
-        <label className="field-label">页面名称</label>
+        <label className="field-label">{t('nameLabel')}</label>
         <input
           className="input"
           autoFocus
-          placeholder="如：登录页、首页、个人中心"
+          placeholder={t('namePlaceholder')}
           value={pageName}
           onChange={(e) => setPageName(e.target.value)}
         />
 
-        <label className="field-label">端类型</label>
-        <USelect
-          value={platform}
-          onChange={(v) => setPlatform(v as Platform)}
-          options={(Object.keys(PLATFORM_LABELS) as Platform[]).map((k) => ({ value: k, label: PLATFORM_LABELS[k] }))}
-        />
+        <label className="field-label">{t('platformLabel')}</label>
+        {/* 端类型使用与新建走查向导一致的 Segmented 组件（每项带平台语义 icon） */}
+        <div className="segmented">
+          {PLATFORMS.map((k) => (
+            <button
+              key={k}
+              type="button"
+              className={`segment-item${platform === k ? ' active' : ''}`}
+              onClick={() => setPlatform(k)}
+            >
+              <PlatformIcon platform={k} />
+              {t(`platform_${k}`)}
+            </button>
+          ))}
+        </div>
 
-        <label className="field-label">设计稿 Figma 链接（可选）</label>
+        <label className="field-label">{t('figmaLabel')}</label>
         <input
           className="input"
-          placeholder="如：https://www.figma.com/file/xxxx/页面名"
+          placeholder={t('figmaPlaceholder')}
           value={figmaUrl}
           onChange={(e) => setFigmaUrl(e.target.value)}
+        />
+
+        <label className="field-label">{t('devUrlLabel')}</label>
+        <input
+          className="input"
+          placeholder={t('devUrlPlaceholder')}
+          value={devUrl}
+          onChange={(e) => setDevUrl(e.target.value)}
         />
 
         <div className="modal-actions">
           <span className="modal-spacer" />
           <button className="btn-secondary" onClick={onCancel}>
-            取消
+            {t('cancel')}
           </button>
           <button className="btn-primary" disabled={!canSave} onClick={handleSave}>
-            保存
+            {t('save')}
           </button>
         </div>
       </div>
