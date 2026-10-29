@@ -1,0 +1,9 @@
+{
+  "name": "engine-bridge",
+  "private": true,
+  "version": "1.0.0",
+  "description": "UI 走查工具 SwiftUI 版引擎桥接 CLI：打包 Electron 版纯逻辑引擎模块（matcher/diff/figma/specCheck/elementCheck/a11yCheck）为单文件 CJS，供 Swift Process 调用",
+  "scripts": {
+    "build": "node build.mjs"
+  }
+}

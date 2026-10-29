@@ -2,7 +2,7 @@ import SwiftData
 import SwiftUI
 
 /// 工作台模式：手动标注（双图对比）/ 自动走查（Figma 结构化比对）
-/// （对齐 CompareWorkbench.tsx `WorkMode`；自动走查依赖引擎桥接，占位至里程碑 m5）
+/// （对齐 CompareWorkbench.tsx `WorkMode`；自动走查面板见 Walk/AutoWalkPanelView）
 enum WorkbenchWorkMode: String, CaseIterable, Identifiable {
     case manual
     case auto
@@ -110,9 +110,8 @@ struct CompareWorkbenchView: View {
     var body: some View {
         VStack(spacing: 0) {
             headerBar
-            if workMode == .manual {
-                focusBar
-            }
+            // 聚焦条：手动/自动两种模式共用（自动走查抽屉点卡片同样进入聚焦）
+            focusBar
             toolbar
             Divider()
             if workMode == .manual {
@@ -139,7 +138,16 @@ struct CompareWorkbenchView: View {
                 toolRail
             } else {
                 HStack(spacing: 0) {
-                    autoWalkPlaceholder
+                    if let page {
+                        AutoWalkPanelView(page: page, walkIssues: modeIssues, numbers: issueNos)
+                    } else {
+                        ContentUnavailableView {
+                            Label("未打开页面", systemImage: "photo.on.rectangle.angled")
+                        } description: {
+                            Text("从「项目」选择页面打开，即可开始自动走查")
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                     if drawerOpen {
                         Divider()
                         IssueDrawerPanel(
@@ -417,16 +425,6 @@ struct CompareWorkbenchView: View {
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
-    }
-
-    /// 自动走查占位：引擎桥接（engine-bridge CLI + Process）与 Figma 结构化比对在 m5 实现
-    private var autoWalkPlaceholder: some View {
-        ContentUnavailableView {
-            Label("自动走查", systemImage: "wand.and.stars")
-        } description: {
-            Text("Figma 结构化比对 + 自动走查引擎将在后续里程碑实现")
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - 标注动作

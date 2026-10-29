@@ -5,3 +5,6 @@ build/
 *.xcuserstate
 node_modules/
 dist/
+# 引擎 CLI 编译产物是 Swift 端 Process 调用的运行时依赖，需随库分发
+!engine-bridge/dist/
+!engine-bridge/dist/**
