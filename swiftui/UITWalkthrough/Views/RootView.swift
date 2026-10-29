@@ -1,13 +1,14 @@
 import SwiftUI
 
 /// 应用根视图：侧边栏导航 + 内容区路由
-/// （对齐 Electron 版 [App.tsx] 路由结构与 [Layout.tsx] 左侧项目树，后续里程碑逐项填充）
+/// （对齐 Electron 版 [App.tsx] 路由结构与 [Layout.tsx] 左侧项目树）
 struct RootView: View {
-    @State private var selection: AppSection = .compare
+    @State private var appState = AppState()
 
     var body: some View {
+        @Bindable var appState = appState
         NavigationSplitView {
-            List(selection: $selection) {
+            List(selection: $appState.section) {
                 Section {
                     ForEach(AppSection.allCases) { section in
                         Label(section.title, systemImage: section.icon)
@@ -18,13 +19,13 @@ struct RootView: View {
             .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 320)
             .listStyle(.sidebar)
         } detail: {
-            switch selection {
-            case .compare:
-                CompareWorkbenchView()
+            switch appState.section {
             case .projects:
-                ComingSoonView(title: "项目列表", hint: "对应 Electron 版 ProjectList / ProjectDetail")
+                ProjectsHomeView()
             case .recent:
                 ComingSoonView(title: "最近访问", hint: "对应 Electron 版 RecentAccess")
+            case .compare:
+                CompareWorkbenchView()
             case .reports:
                 ComingSoonView(title: "分析报告", hint: "对应 Electron 版 ReportsPage")
             case .specs:
@@ -33,6 +34,7 @@ struct RootView: View {
                 ComingSoonView(title: "设置", hint: "对应 Electron 版 Settings（容差 / AI 模型 / 云文档 / MCP）")
             }
         }
+        .environment(appState)
         .frame(minWidth: 1100, minHeight: 700)
     }
 }
