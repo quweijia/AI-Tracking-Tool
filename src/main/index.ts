@@ -184,13 +184,20 @@ function registerLangHandlers(): void {
 
 /** 自绘窗口控制按钮的 IPC（原生红绿灯失焦重绘会消失，改为渲染层实现） */
 function registerWindowControls(): void {
-  ipcMain.on('window:minimize', () => win?.minimize())
-  ipcMain.on('window:maximize', () => {
+  // macOS 原生红绿灯在失焦时点击也能完成「激活 + 操作」，自绘按钮需在每次操作前补一次 focus 对齐该行为
+  const focusAnd = (fn: () => void): void => {
+    if (win) {
+      win.focus()
+      fn()
+    }
+  }
+  ipcMain.on('window:minimize', () => focusAnd(() => win?.minimize()))
+  ipcMain.on('window:maximize', () => focusAnd(() => {
     if (!win) return
     if (win.isMaximized()) win.unmaximize()
     else win.maximize()
-  })
-  ipcMain.on('window:close', () => win?.close())
+  }))
+  ipcMain.on('window:close', () => focusAnd(() => win?.close()))
 }
 
 /** 主窗口引用（自绘窗口控制按钮的 IPC 使用） */
@@ -218,6 +225,17 @@ function createWindow(): void {
     }
   })
   win = mainWindow
+
+  // 失焦激活兜底：macOS 上点击未激活窗口的顶栏（app-region: drag 区域及其周边）激活时，
+  // 渲染层收不到 DOM focus/blur 与后续鼠标事件（事件流卡死，窗口控制按钮置灰且点不动）。
+  // 主进程事件始终可靠：激活时强制恢复 webContents 事件焦点以解开卡死状态，
+  // 并把聚焦状态经 IPC 推给渲染层，同步按钮置灰态。
+  mainWindow.on('focus', () => {
+    // 仅在 webContents 未持焦时补一次，避免 focus 事件内反复触发
+    if (!mainWindow.webContents.isFocused()) mainWindow.webContents.focus()
+    mainWindow.webContents.send('window:focus-changed', true)
+  })
+  mainWindow.on('blur', () => mainWindow.webContents.send('window:focus-changed', false))
 
   mainWindow.on('ready-to-show', () => {
     // macOS：永久隐藏原生红绿灯，改用渲染层自绘窗口控制按钮

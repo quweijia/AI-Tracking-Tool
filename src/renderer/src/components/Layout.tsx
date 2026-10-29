@@ -46,14 +46,18 @@ function MoonIcon() {
 /** 自绘 macOS 窗口控制按钮（原生红绿灯失焦重绘会消失，改为渲染层实现；失焦置灰） */
 function WindowControls() {
   const { t } = useTranslation('layout')
-  const [focused, setFocused] = useState(true)
+  const [focused, setFocused] = useState(() => document.hasFocus())
   useEffect(() => {
     const sync = () => setFocused(document.hasFocus())
     window.addEventListener('focus', sync)
     window.addEventListener('blur', sync)
+    // 点击未激活窗口的拖拽区激活时 DOM focus/blur 会被吞掉，用主进程 IPC 兜底同步置灰态
+    // （?. 防御：preload 未重建时 API 缺失，避免崩溃白屏）
+    const off = window.electronAPI.onWindowFocusChanged?.(setFocused)
     return () => {
       window.removeEventListener('focus', sync)
       window.removeEventListener('blur', sync)
+      off?.()
     }
   }, [])
   return (

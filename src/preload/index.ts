@@ -208,6 +208,12 @@ const api = {
   minimizeWindow: (): void => ipcRenderer.send('window:minimize'),
   maximizeWindow: (): void => ipcRenderer.send('window:maximize'),
   closeWindow: (): void => ipcRenderer.send('window:close'),
+  /** 主窗口：订阅窗口聚焦状态（主进程 focus/blur 转发；激活点击被吞时 DOM focus/blur 不可靠） */
+  onWindowFocusChanged: (cb: (focused: boolean) => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, focused: boolean): void => cb(focused)
+    ipcRenderer.on('window:focus-changed', listener)
+    return () => ipcRenderer.removeListener('window:focus-changed', listener)
+  },
   // 自动走查：Figma REST 只读读取（图层样式树 + Frame 截图）
   figmaFetchDesign: (input: {
     pat: string
