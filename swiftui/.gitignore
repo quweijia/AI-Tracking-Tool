@@ -1,0 +1,6 @@
+xcuserdata/
+DerivedData/
+.build/
+*.xcuserstate
+node_modules/
+dist/
