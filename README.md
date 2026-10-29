@@ -50,6 +50,8 @@ UI 设计走查（Visual QA）桌面应用，面向设计/前端协作场景：�
 | macOS Apple Silicon | `AI 走查工具-{version}-arm64.dmg` / `.zip` | M1/M2/M3/M4 系列 |
 | Windows x64 | `AI-Walkthrough-Setup-{version}.exe` | NSIS 向导式安装，可选安装目录 |
 
+也可直接从 GitHub Releases 下载（Release 资产使用 ASCII 文件名，如 `AI-Walkthrough-1.0.0-x64.dmg`）：https://github.com/quweijia/AI-Tracking-Tool/releases
+
 未申请代码签名证书：
 
 - **macOS** 首次打开若提示「无法验证开发者」，右键 App → 「打开」，或前往 系统设置 → 隐私与安全性 → 仍要打开
