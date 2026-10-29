@@ -1,7 +1,7 @@
 {
   "name": "ui-walkthrough",
   "productName": "AI 走查工具",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "UI 设计走查工具：设计稿与开发截图对比、标注、复验与报告导出",
   "author": "quweijia",
   "main": "./out/main/index.js",
@@ -13,7 +13,7 @@
     "build:mac:intel": "npm run typecheck && npm run build && electron-builder --mac --x64 --publish never",
     "build:mac:arm": "npm run typecheck && npm run build && electron-builder --mac --arm64 --publish never",
     "build:win": "npm run typecheck && npm run build && electron-builder --win --x64 --publish never",
-    "build:all": "npm run typecheck && npm run build && electron-builder --mac --x64 --arm64 --win --x64 --publish never",
+    "build:all": "npm run typecheck && npm run build && electron-builder --mac --win --publish never",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web"
