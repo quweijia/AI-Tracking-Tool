@@ -261,7 +261,7 @@ enum SpecStore {
 
     /// 某版本全部 Token（按入库序号排序，保持 Figma 解析 / JSON 导入的原始分组与顺序）
     static func tokens(_ ctx: ModelContext, versionId: String) -> [SpecToken] {
-        var d = FetchDescriptor<SpecToken>(predicate: #Predicate { $0.versionId == versionId })
+        let d = FetchDescriptor<SpecToken>(predicate: #Predicate { $0.versionId == versionId })
         let rows = (try? ctx.fetch(d)) ?? []
         return rows.sorted { ($0.sortNo ?? 0) < ($1.sortNo ?? 0) }
     }

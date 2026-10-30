@@ -235,7 +235,7 @@ struct SpecDetailView: View {
             guard let kf = kindFilter else { return [] }
             src = tokens.filter { $0.kind == kf }
         }
-        var root = SideNode(seg: "", keyPath: "")
+        let root = SideNode(seg: "", keyPath: "")
         for tok in src {
             let segs = (mv[tok.id]?.basePath ?? tok.path)
                 .split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -1041,9 +1041,8 @@ struct SpecDetailView: View {
     private func uploadFig(_ spec: DesignSpec) {
         let panel = NSOpenPanel()
         panel.title = "选择 .fig 文件"
-        panel.allowedContentTypes = []
+        panel.allowedContentTypes = [.init(filenameExtension: "fig")!]
         panel.allowsOtherFileTypes = true
-        panel.allowedFileTypes = ["fig"]
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -1113,7 +1112,7 @@ struct SpecDetailView: View {
         guard let spec else { return }
         let panel = NSOpenPanel()
         panel.title = "选择 Token JSON 文件"
-        panel.allowedFileTypes = ["json"]
+        panel.allowedContentTypes = [.init(filenameExtension: "json")!]
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
@@ -1163,7 +1162,8 @@ struct SpecDetailView: View {
         }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "\(spec?.name ?? "tokens").\(suffix)"
-        panel.allowedFileTypes = [suffix.components(separatedBy: ".").last ?? "json"]
+        let ext = suffix.components(separatedBy: ".").last ?? "json"
+        panel.allowedContentTypes = [.init(filenameExtension: ext)!]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let text = try await EngineBridge.exportTokens(EngineJSONBox(values: list), format: format)

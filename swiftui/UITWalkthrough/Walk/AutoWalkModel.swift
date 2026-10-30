@@ -370,7 +370,7 @@ final class AutoWalkModel {
                 onProgress: { chars, elapsedMs in
                     let sec = Int((elapsedMs / 1000).rounded())
                     let note = "\(sec)s · 已接收 \(String(format: "%.1f", Double(chars) / 1000))k 字"
-                    await AiTaskStore.shared.progressPage(pageName: pageNameForTask, note: note)
+                    AiTaskStore.shared.progressPage(pageName: pageNameForTask, note: note)
                 }
             )
             // 任务被用户中断：丢弃结果，不落库

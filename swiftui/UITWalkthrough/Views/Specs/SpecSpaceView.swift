@@ -682,7 +682,7 @@ struct SpecCategoryListView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if let category {
+                if self.category != nil {
                     header
                 }
                 if specs.isEmpty {
