@@ -15,7 +15,7 @@ struct FigmaMcpConfig: Codable, Equatable, Sendable {
     var pat: String?
 }
 
-/// 应用配置。当前收敛自动走查消费的键；AI 模型等键在后续里程碑补充。
+/// 应用配置（对齐 Electron config.json 全部消费键）
 struct AppConfig: Codable, Equatable, Sendable {
     var mcps: [McpEntryConfig]?
     var figmaMcp: FigmaMcpConfig?
@@ -25,6 +25,12 @@ struct AppConfig: Codable, Equatable, Sendable {
     var walkCheckOptions: WalkCheckOptions?
     /// 高级调试子开关（结构化尺寸 diff，默认关闭）
     var walkAdvancedDebug: Bool?
+    /// AI 模型列表（aiModels，OpenAI 兼容协议）
+    var aiModels: [AIModelConfig]?
+    /// 默认 AI 模型 id（aiDefaultModelId）
+    var aiDefaultModelId: String?
+    /// AI 任务完成提示音开关（soundEnabled，缺省开启）
+    var soundEnabled: Bool?
 
     static let defaultValue = AppConfig()
 

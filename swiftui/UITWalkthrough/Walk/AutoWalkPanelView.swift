@@ -61,6 +61,18 @@ struct AutoWalkPanelView: View {
         !(page.walkDesignPath ?? "").isEmpty && !(page.walkShotPath ?? "").isEmpty
     }
 
+    // MARK: - AI 识别后台任务（跨页面运行，切页返回时恢复状态）
+
+    /// 本页 AI 任务列表
+    private var pageAiTasks: [AiTask] {
+        AiTaskStore.shared.tasks.filter { $0.pageId == page.id }
+    }
+
+    /// 本页是否有进行中的 AI 识别任务
+    private var aiTaskRunning: Bool {
+        pageAiTasks.contains { $0.status == .running }
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -112,6 +124,15 @@ struct AutoWalkPanelView: View {
                 }
             }
             Button("取消", role: .cancel) {}
+        }
+        .onChange(of: AiTaskStore.shared.tasks) { _, tasks in
+            // AI 识别后台任务：切页后返回时恢复结果提示，展示后即清理（对齐 Electron useEffect）
+            let finished = tasks.filter { $0.pageId == page.id && $0.status != .running }
+            guard !finished.isEmpty, let model else { return }
+            if let last = finished.last {
+                model.msg = WalkMessage(ok: finished.allSatisfy { $0.status == .done }, text: last.message)
+            }
+            AiTaskStore.shared.clear(finished.map(\.id))
         }
     }
 
@@ -165,7 +186,7 @@ struct AutoWalkPanelView: View {
                                 Task { await model.runStructured(context: context, page: page) }
                             }
                             .controlSize(.small)
-                            .disabled(model.running || model.waiting)
+                            .disabled(model.running || model.waiting || aiTaskRunning)
                         }
                         startButton(model)
                     }
@@ -177,6 +198,21 @@ struct AutoWalkPanelView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Button("取消等待") { model.cancelWait() }
+                                .controlSize(.small)
+                        }
+                    }
+                    if aiTaskRunning, let runningTask = pageAiTasks.first(where: { $0.status == .running }) {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("AI 识别任务进行中（可切换其他页面，任务后台运行）...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(runningTask.message)
+                                .font(.caption)
+                                .monospacedDigit()
+                            Spacer()
+                            Button("中断任务") { AiTaskStore.shared.interrupt(runningTask.id) }
                                 .controlSize(.small)
                         }
                     }
@@ -194,7 +230,7 @@ struct AutoWalkPanelView: View {
         if hasWalkImages {
             Button("重新走查") { rewalkConfirmOpen = true }
                 .controlSize(.small)
-                .disabled(model.running || model.waiting)
+                .disabled(model.running || model.waiting || aiTaskRunning)
         } else {
             Button {
                 Task { await model.startWalk(context: context, page: page) }
@@ -202,7 +238,7 @@ struct AutoWalkPanelView: View {
                 if model.running { ProgressView().controlSize(.small) } else { Text("开始走查") }
             }
             .controlSize(.small)
-            .disabled(model.running || model.waiting)
+            .disabled(model.running || model.waiting || aiTaskRunning)
         }
     }
 
@@ -415,7 +451,7 @@ struct AutoWalkPanelView: View {
 
 // MARK: - 自定义检查项弹窗（对齐 Electron 自定义检查项：a11y 开关 + 检查深度 + 六项容差）
 //
-// 检查维度 / 分析设置 / 输出风格为 AI 视觉走查（m7）的选项，接入后生效。
+// 检查维度 / 分析设置 / 输出风格注入 AI 视觉走查 prompt（AIVisionService.walkOptionsPrompt）。
 
 struct WalkCheckOptionsSheet: View {
     @Bindable var model: AutoWalkModel
@@ -423,18 +459,65 @@ struct WalkCheckOptionsSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("自定义检查项")
-                .font(.headline)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("自定义检查项")
+                    .font(.headline)
+                Text("配置自动走查与 AI 视觉比对的检查范围与输出方式，保存后对本项目后续走查生效。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
+            Text("检查维度")
+                .font(.callout)
+                .fontWeight(.medium)
+            chipGroup(
+                WalkCatalog.dimensions,
+                selection: Binding(
+                    get: { model.checkOptions.dimensions },
+                    set: { model.checkOptions.dimensions = $0 }
+                )
+            )
+
+            Text("检查深度")
+                .font(.callout)
+                .fontWeight(.medium)
             Picker("检查深度", selection: $model.checkOptions.depth) {
                 ForEach(WalkDepth.allCases, id: \.self) { depth in
                     Text(depth.label).tag(depth)
                 }
             }
             .pickerStyle(.segmented)
+            Text("深度影响 AI 视觉走查的检查精细度；高级调试的结构化比对仅在严格模式下标注宽高与内边距 / 间距类尺寸问题。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
-            Toggle("叠加无障碍检查（图片缺 alt / 对比度 / 字号 / 点击区域 / 表单标签）", isOn: $model.checkOptions.a11y)
+            Text("AI 分析设置")
                 .font(.callout)
+                .fontWeight(.medium)
+            chipGroup(
+                WalkCatalog.analyses,
+                selection: Binding(
+                    get: { model.checkOptions.analysis },
+                    set: { model.checkOptions.analysis = $0 }
+                )
+            )
+
+            Text("输出风格")
+                .font(.callout)
+                .fontWeight(.medium)
+            Picker("输出风格", selection: $model.checkOptions.style) {
+                ForEach(WalkOutputStyle.allCases, id: \.self) { style in
+                    Text(style.label).tag(style)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Divider()
+            Toggle("启用无障碍检查", isOn: $model.checkOptions.a11y)
+                .font(.callout)
+            Text("检查图片缺 alt、文字对比度过低、字号过小、点击区域过小、表单控件缺标签，默认关闭，按需开启。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             Divider()
             Text("结构化比对容差（px / ΔE，超出阈值才报差异）")
@@ -446,10 +529,20 @@ struct WalkCheckOptionsSheet: View {
                 Spacer()
                 Button("完成") { dismiss() }
                     .keyboardShortcut(.defaultAction)
+                    .disabled(model.checkOptions.dimensions.isEmpty || model.checkOptions.analysis.isEmpty)
             }
         }
         .padding(16)
-        .frame(width: 420)
+        .frame(width: 460)
+    }
+
+    /// 多选 chips（对齐 CheckChips：选中高亮，AI prompt 注入用 WalkCatalog 原 label）
+    private func chipGroup(_ options: [WalkCatalog.Dimension], selection: Binding<[String]>) -> some View {
+        FlowChips(options: options.map { .init(key: $0.key, label: $0.label) }, selection: selection)
+    }
+
+    private func chipGroup(_ options: [WalkCatalog.Analysis], selection: Binding<[String]>) -> some View {
+        FlowChips(options: options.map { .init(key: $0.key, label: $0.label) }, selection: selection)
     }
 
     private var toleranceGrid: some View {
@@ -482,6 +575,47 @@ struct WalkCheckOptionsSheet: View {
             ), format: .number.precision(.fractionLength(0...2)))
             .textFieldStyle(.roundedBorder)
             .frame(width: 72)
+        }
+    }
+}
+
+/// 多选标签组（对齐 Electron CheckChips：点击切换选中，胶囊高亮）
+struct FlowChips: View {
+    struct Option: Identifiable {
+        let key: String
+        let label: String
+        var id: String { key }
+    }
+
+    let options: [Option]
+    @Binding var selection: [String]
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 6) {
+            ForEach(options) { opt in
+                let selected = selection.contains(opt.key)
+                Button {
+                    if selected {
+                        selection.removeAll { $0 == opt.key }
+                    } else {
+                        selection.append(opt.key)
+                    }
+                } label: {
+                    Text(opt.label)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            Capsule().fill(selected ? Color.accentColor.opacity(0.16) : Color(nsColor: .controlBackgroundColor))
+                        )
+                        .overlay(
+                            Capsule().strokeBorder(selected ? Color.accentColor : Color(nsColor: .separatorColor))
+                        )
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 }

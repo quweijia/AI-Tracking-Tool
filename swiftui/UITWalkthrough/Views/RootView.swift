@@ -31,7 +31,7 @@ struct RootView: View {
             case .specs:
                 SpecSpaceView()
             case .settings:
-                ComingSoonView(title: "设置", hint: "对应 Electron 版 Settings（容差 / AI 模型 / 云文档 / MCP）")
+                SettingsView()
             }
         }
         .environment(appState)

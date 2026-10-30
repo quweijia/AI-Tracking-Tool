@@ -4,8 +4,8 @@ import SwiftData
 // MARK: - 自动走查状态模型（对齐 Electron AutoWalkPanel 的状态与流程编排）
 //
 // 流程：startWalk（读 Figma 画板尺寸 → 打开采集窗口）→ DevCaptureWindow 采集回传
-// → handleCaptured（拉取 Figma 设计稿 → 保存双图 → 程序轨三校验落库）→ runStructured（高级调试结构化比对）。
-// AI 视觉走查轨在 m7 接入，当前提示「将在后续版本接入」。
+// → handleCaptured（拉取 Figma 设计稿 → 保存双图 → 程序轨三校验落库 → AI 视觉走查轨落库）→ runStructured（高级调试结构化比对）。
+// AI 视觉走查轨经 AIVisionService（URLSession 直连 OpenAI 兼容接口）完成，注册 AiTaskStore 后台任务跨页面运行。
 // 低置信度匹配确认抽屉（MatchConfirmDrawer）后续里程碑实现，当前仅报条数。
 
 /// 面板消息条（ok = 绿色成功 / 红色失败）
@@ -56,12 +56,15 @@ enum WalkLayerFilter: CaseIterable, Identifiable {
     }
 }
 
-/// 最近一次走查的采集数据（结构化比对依赖；应用重启后失效）
+/// 最近一次走查的采集数据（结构化比对 / AI 视觉走查依赖；应用重启后失效）
 struct WalkLastRun {
     var designRootJSON: Data
     var domRootJSON: Data
     var viewport: CGSize
     var frameSize: CGSize?
+    /// 原始双图 PNG（AI 识别 base64 上传、测量标注换算 px、吸色双图取样用）
+    var designPNG: Data
+    var shotPNG: Data
 }
 
 @MainActor
@@ -260,36 +263,39 @@ final class AutoWalkModel {
                 designRootJSON: designRootJSON,
                 domRootJSON: payload.domRootJSON,
                 viewport: payload.viewport,
-                frameSize: frameSize
+                frameSize: frameSize,
+                designPNG: designPNG,
+                shotPNG: payload.screenshotPNG
             )
 
             // 3. 程序轨三校验（各自独立，失败不阻断主流程；有新结果时覆盖上一轮同 source 行）
             let walkIssues = fetchWalkIssues(context: context, pageId: page.id)
 
-            var specCount = 0
+            var specRows: [Issue] = []
+            let specToks = loadSpecTokens(context: context, projectId: page.projectId, platform: page.platform)
             do {
-                let tokens = loadSpecTokens(context: context, projectId: page.projectId, platform: page.platform)
-                if !tokens.isEmpty {
+                if !specToks.isEmpty {
                     let dto = try await EngineBridge.checkSpec(
                         domRootJSON: payload.domRootJSON,
-                        tokens: tokens,
+                        tokens: specToks,
                         viewport: payload.viewport,
                         tolerance: tolerance
                     )
                     if let violations = dto.violations, !violations.isEmpty {
+                        let rows = violations.enumerated().map { violationToIssue($0.element, index: $0.offset, pageId: page.id) }
                         replaceRows(
                             of: walkIssues.filter { $0.source == .spec },
-                            violations.enumerated().map { violationToIssue($0.element, index: $0.offset, pageId: page.id) },
+                            with: rows,
                             context: context
                         )
-                        specCount = violations.count
+                        specRows = rows
                     }
                 }
             } catch {
                 // 规范校验失败不阻断走查主流程
             }
 
-            var elementCount = 0
+            var elementRows: [Issue] = []
             do {
                 let dto = try await EngineBridge.checkElements(
                     designRootJSON: designRootJSON,
@@ -298,18 +304,19 @@ final class AutoWalkModel {
                     viewport: payload.viewport
                 )
                 if let findings = dto.findings, !findings.isEmpty {
+                    let rows = findings.enumerated().map { elementFindingToIssue($0.element, index: $0.offset, pageId: page.id) }
                     replaceRows(
                         of: walkIssues.filter { $0.source == .element },
-                        findings.enumerated().map { elementFindingToIssue($0.element, index: $0.offset, pageId: page.id) },
+                        with: rows,
                         context: context
                     )
-                    elementCount = findings.count
+                    elementRows = rows
                 }
             } catch {
                 // 元素清单校验失败不阻断走查主流程
             }
 
-            var a11yCount = 0
+            var a11yRows: [Issue] = []
             if checkOptions.a11y {
                 do {
                     let dto = try await EngineBridge.checkA11y(
@@ -317,12 +324,13 @@ final class AutoWalkModel {
                         viewport: payload.viewport
                     )
                     if let findings = dto.findings, !findings.isEmpty {
+                        let rows = findings.enumerated().map { a11yFindingToIssue($0.element, index: $0.offset, pageId: page.id) }
                         replaceRows(
                             of: walkIssues.filter { $0.source == .a11y },
-                            findings.enumerated().map { a11yFindingToIssue($0.element, index: $0.offset, pageId: page.id) },
+                            with: rows,
                             context: context
                         )
-                        a11yCount = findings.count
+                        a11yRows = rows
                     }
                 } catch {
                     // a11y 检查失败不阻断走查主流程
@@ -331,23 +339,87 @@ final class AutoWalkModel {
 
             try? context.save()
 
-            // 4. 程序轨完成提示（AI 视觉走查轨 m7 接入）
-            let progCount = specCount + elementCount + a11yCount
-            var parts: [String] = []
-            if progCount > 0 {
-                var detail: [String] = []
-                if specCount > 0 { detail.append("规范 \(specCount) 处") }
-                if elementCount > 0 { detail.append("元素 \(elementCount) 处") }
-                if a11yCount > 0 { detail.append("无障碍 \(a11yCount) 处") }
-                parts.append("已先行落库 \(progCount) 条程序校验问题（\(detail.joined(separator: " · "))）")
-            } else {
-                parts.append("程序轨校验完成：未发现程序校验问题")
+            // 4. AI 视觉走查（后台任务跨页面运行；无默认模型则跳过，仅保留程序轨结果）
+            let cfgNow = AppConfigStore.load()
+            let modelId = cfgNow.aiDefaultModelId ?? cfgNow.aiModels?.first?.id ?? ""
+            let progCount = specRows.count + elementRows.count + a11yRows.count
+            guard !modelId.isEmpty else {
+                var text = "未配置默认 AI 模型，已跳过 AI 视觉走查"
+                if progCount > 0 { text += " 已先行落库 \(progCount) 条程序校验问题" }
+                msg = WalkMessage(ok: false, text: text)
+                return
             }
-            parts.append("AI 视觉走查将在后续版本接入")
-            if advancedDebug {
-                parts.append("可在「高级调试」中运行结构化比对")
+            let taskId = AiTaskStore.shared.start(pageId: page.id, pageName: page.pageName)
+            msg = WalkMessage(ok: true, text: "AI 视觉走查识别中...")
+            let walkOptions = WalkOptionsInput(
+                dimensionLabels: WalkCatalog.dimensions.filter { checkOptions.dimensions.contains($0.key) }.map(\.label),
+                depth: checkOptions.depth,
+                analysisLabels: WalkCatalog.analyses.filter { checkOptions.analysis.contains($0.key) }.map(\.label),
+                style: checkOptions.style,
+                specSummary: specToks.isEmpty ? nil : formatSpecSummary(specToks)
+            )
+            let pageNameForTask = page.pageName
+            let res = await AIVisionService.aiAnnotate(
+                modelId: modelId,
+                pageName: page.pageName,
+                platformLabel: "",
+                designPNG: designPNG,
+                shotPNG: payload.screenshotPNG,
+                walkOptions: walkOptions,
+                onProgress: { chars, elapsedMs in
+                    let sec = Int((elapsedMs / 1000).rounded())
+                    let note = "\(sec)s · 已接收 \(String(format: "%.1f", Double(chars) / 1000))k 字"
+                    await AiTaskStore.shared.progressPage(pageName: pageNameForTask, note: note)
+                }
+            )
+            // 任务被用户中断：丢弃结果，不落库
+            if AiTaskStore.shared.tasks.first(where: { $0.id == taskId })?.status == .interrupted {
+                AiTaskStore.shared.clear(taskId)
+                return
             }
-            msg = WalkMessage(ok: true, text: parts.joined(separator: "；"))
+            if !res.ok {
+                AiTaskStore.shared.finish(taskId, ok: false, message: res.message)
+                msg = WalkMessage(ok: false, text: res.message)
+                // 高级调试开启时，AI 失败也补跑一次结构化 diff（有精确还原调试需求的开发用）
+                if advancedDebug { await runStructured(context: context, page: page, force: true) }
+                return
+            }
+            // 覆盖未审核的旧视觉候选后落库
+            let walkIssuesNow = fetchWalkIssues(context: context, pageId: page.id)
+            for old in walkIssuesNow where old.source == .visual && old.isAISuggested == true && old.aiConfirmed != true {
+                context.delete(old)
+            }
+            // AI 结果转 Issue：测量标注换算 px、吸色标注双图取样，再吸附与去重落库
+            let visualRows = aiAnnotationsToIssues(
+                pageId: page.id,
+                annotations: res.issues,
+                designPNG: designPNG,
+                shotPNG: payload.screenshotPNG
+            )
+            // AI 视觉框吸附到 DOM/Figma 真实元素矩形，消除模型坐标估算偏移
+            AiRectRefine.refine(visualRows, input: AiRectRefine.Input(
+                domRootJSON: payload.domRootJSON,
+                viewport: payload.viewport,
+                designRootJSON: designRootJSON,
+                frameSize: frameSize
+            ))
+            let visualCount = saveVisualIssues(
+                visualRows,
+                dedupBase: specRows + elementRows + a11yRows,
+                context: context,
+                page: page
+            )
+            let total = res.issues.count
+            var doneText = total > 0
+                ? "AI 视觉走查完成：新增 \(visualCount) 条问题候选（\(total - visualCount) 条重合已去重）"
+                : "AI 视觉走查完成：未发现明显差异"
+            if !specRows.isEmpty { doneText += " 规范校验发现 \(specRows.count) 处不符" }
+            if !elementRows.isEmpty { doneText += " 元素清单发现 \(elementRows.count) 处" }
+            if !a11yRows.isEmpty { doneText += " 无障碍检查发现 \(a11yRows.count) 处" }
+            AiTaskStore.shared.finish(taskId, ok: true, message: doneText)
+            msg = WalkMessage(ok: true, text: doneText)
+            // 高级调试开启时，AI 完成后自动补跑一次结构化 diff
+            if advancedDebug { await runStructured(context: context, page: page, force: true) }
         } catch {
             msg = WalkMessage(ok: false, text: error.localizedDescription)
         }
@@ -524,6 +596,161 @@ final class AutoWalkModel {
             ])
         }
         return rows
+    }
+
+    // MARK: - AI 视觉轨辅助（对齐 formatSpecSummary / aiAnnotationsToIssues / saveIssues 去重）
+
+    /// 每类 Token 在 AI prompt 摘要中的最大条数（防 prompt 超限，对齐 SPEC_SUMMARY_LIMIT）
+    private static let specSummaryLimit = 30
+
+    /// 单条 Token 的值文本（颜色 hex / 数值 px / 阴影描边结构文本，对齐 tokenValueLabel）
+    private static func tokenValueLabel(_ value: [String: Any]) -> String {
+        let kind = value["kind"] as? String ?? ""
+        let num = { (key: String) -> Double in
+            switch value[key] {
+            case let d as Double: return d.isFinite ? d : 0
+            case let i as Int: return Double(i)
+            case let n as NSNumber: return n.doubleValue
+            default: return 0
+            }
+        }
+        let text = { (key: String) -> String in value[key] as? String ?? "" }
+        let trimNum = { (v: Double) -> String in v == v.rounded() ? "\(Int(v))" : "\(v)" }
+        switch kind {
+        case "color":
+            return text("hex")
+        case "shadow":
+            let layers = value["layers"] as? [[String: Any]] ?? []
+            return layers.map { l -> String in
+                let inset = (l["inset"] as? Bool) == true ? "inset " : ""
+                let spread: Double = switch l["spread"] {
+                case let d as Double: d.isFinite ? d : 0
+                case let i as Int: Double(i)
+                default: 0
+                }
+                return "\(inset)\(trimNum(l["x"] as? Double ?? 0))px \(trimNum(l["y"] as? Double ?? 0))px \(trimNum(l["blur"] as? Double ?? 0))px \(trimNum(spread))px \(l["color"] as? String ?? "")"
+            }.joined(separator: ", ")
+        case "border":
+            return "\(trimNum(num("width")))px \(text("style")) \(text("color"))"
+        case "spacing", "fontSize", "lineHeight", "radius":
+            return "\(trimNum(num("value")))px"
+        default:
+            return ""
+        }
+    }
+
+    /// AI 轨 prompt 注入用 Token 摘要：7 类固定顺序分组，每类只列前 30 条，超限在组尾注明总数
+    private static func formatSpecSummary(_ tokens: [[String: Any]]) -> String {
+        let groups: [(kind: String, label: String)] = [
+            ("color", "颜色"), ("spacing", "间距"), ("fontSize", "字号"), ("lineHeight", "行高"),
+            ("radius", "圆角"), ("shadow", "阴影"), ("border", "边框")
+        ]
+        var lines: [String] = []
+        for g in groups {
+            let items = tokens.filter { ($0["kind"] as? String) == g.kind }
+            if items.isEmpty { continue }
+            let texts = items.prefix(specSummaryLimit).map { t -> String in
+                let value = t["value"] as? [String: Any] ?? [:]
+                return "\(t["name"] as? String ?? "") \(tokenValueLabel(value))"
+            }
+            let note = items.count > specSummaryLimit ? "（共 \(items.count) 项，仅列前 \(specSummaryLimit)）" : ""
+            lines.append("【\(g.label)】\(texts.joined(separator: "、"))\(note)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// 读取离屏图像归一化坐标处的像素色（hex 大写），失败返回 nil（对齐 sampleAiHex）
+    private static func sampleHex(_ rep: NSBitmapImageRep?, nx: Double, ny: Double) -> String? {
+        guard let rep, rep.pixelsWide > 0, rep.pixelsHigh > 0 else { return nil }
+        let px = min(rep.pixelsWide - 1, max(0, Int((nx * Double(rep.pixelsWide)).rounded())))
+        let py = min(rep.pixelsHigh - 1, max(0, Int((ny * Double(rep.pixelsHigh)).rounded())))
+        guard let c = rep.colorAt(x: px, y: py) else { return nil }
+        return String(
+            format: "#%02X%02X%02X",
+            Int((c.redComponent * 255).rounded()),
+            Int((c.greenComponent * 255).rounded()),
+            Int((c.blueComponent * 255).rounded())
+        )
+    }
+
+    /// AI 标注候选 → Issue 行：
+    /// measure 按所在图片原始尺寸换算 px 写入 measureValue；
+    /// picker 在设计稿与开发截图同一坐标分别取样，写入 sampleA/sampleB 双色对比（对齐 aiAnnotationsToIssues）
+    private func aiAnnotationsToIssues(
+        pageId: String,
+        annotations: [AIAnnotation],
+        designPNG: Data,
+        shotPNG: Data
+    ) -> [Issue] {
+        let designRep = NSBitmapImageRep(data: designPNG)
+        let shotRep = NSBitmapImageRep(data: shotPNG)
+        let startAt = nowMs()
+        return annotations.enumerated().map { idx, a in
+            let own = a.targetImage == .design ? designRep : shotRep
+            let row = Issue(
+                pageId: pageId,
+                targetImage: a.targetImage,
+                x: a.x,
+                y: a.y,
+                width: a.shape == .picker ? 0 : a.width,
+                height: a.shape == .picker ? 0 : a.height,
+                issueDescription: a.description,
+                severity: a.severity,
+                category: a.category,
+                status: .pending,
+                shape: a.shape,
+                imgSet: .walk,
+                source: .visual,
+                createdAt: startAt + Double(idx)
+            )
+            row.isAISuggested = true
+            row.aiConfirmed = false
+            row.aiSuggestion = a.suggestion
+            if a.shape == .measure, let own {
+                let w = a.width * Double(own.pixelsWide)
+                let h = a.height * Double(own.pixelsHigh)
+                row.measureValue = "\(Int(hypot(w, h).rounded()))px"
+            }
+            if a.shape == .picker {
+                row.sampleA = Self.sampleHex(designRep, nx: a.x, ny: a.y)
+                row.sampleB = Self.sampleHex(shotRep, nx: a.x, ny: a.y)
+            }
+            return row
+        }
+    }
+
+    /// 归一化矩形重叠度 IoU（对齐 AutoWalkPanel rectIoU）
+    private static func rectIoU(_ a: Issue, _ b: Issue) -> Double {
+        let x1 = max(a.x, b.x)
+        let y1 = max(a.y, b.y)
+        let x2 = min(a.x + a.width, b.x + b.width)
+        let y2 = min(a.y + a.height, b.y + b.height)
+        let inter = max(0, x2 - x1) * max(0, y2 - y1)
+        if inter <= 0 { return 0 }
+        let union = a.width * a.height + b.width * b.height - inter
+        return union > 0 ? inter / union : 0
+    }
+
+    /// 视觉候选落库：与程序校验行（同类别 + 区域重叠 IoU>0.2）去重后插入（对齐 saveIssues 的视觉分支）
+    @discardableResult
+    private func saveVisualIssues(
+        _ candidates: [Issue],
+        dedupBase: [Issue],
+        context: ModelContext,
+        page: WalkthroughPage
+    ) -> Int {
+        var inserted = 0
+        for v in candidates {
+            let covered = dedupBase.contains { $0.category == v.category && Self.rectIoU($0, v) > 0.2 }
+            if covered { continue }
+            context.insert(v)
+            inserted += 1
+        }
+        if inserted > 0 {
+            page.updatedAt = nowMs()
+            try? context.save()
+        }
+        return inserted
     }
 
     // MARK: - 高级调试：结构化比对（对齐 runStructured）
