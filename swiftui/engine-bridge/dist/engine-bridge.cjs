@@ -464,6 +464,15 @@ var DEFAULT_WALK_CHECK_OPTIONS = {
   style: "detailed",
   a11y: false
 };
+var TOKEN_KIND_TO_TYPE = {
+  color: "color",
+  spacing: "dimension",
+  fontSize: "typography",
+  lineHeight: "typography",
+  radius: "radius",
+  shadow: "shadow",
+  border: "dimension"
+};
 
 // ../../src/main/figma.ts
 var import_node_http = require("node:http");
@@ -650,6 +659,23 @@ async function figmaApi(path, pat) {
     throw new Error(`Figma API \u8BF7\u6C42\u5931\u8D25\uFF08${res.status}\uFF09${detail}`);
   }
   return await res.json();
+}
+async function fetchFigmaFileMeta(fileKey, pat) {
+  try {
+    const meta = await figmaApi(
+      `/files/${encodeURIComponent(fileKey)}?depth=0`,
+      pat
+    );
+    const ts = meta.last_modified ? Date.parse(meta.last_modified) : NaN;
+    return {
+      ok: true,
+      message: "",
+      lastModified: Number.isNaN(ts) ? void 0 : ts,
+      fileName: meta.name
+    };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
 }
 var normType = (t) => {
   switch (t) {
@@ -852,6 +878,791 @@ async function fetchFigmaNodeSize(input) {
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : String(err) };
   }
+}
+
+// ../../src/shared/figmaUrl.ts
+function extractFigmaFileKey(url) {
+  const m = /figma\.com\/(?:file|design|proto|board)\/([A-Za-z0-9]{10,})/.exec(url.trim());
+  return m ? m[1] : null;
+}
+
+// ../../src/shared/variablesImport.ts
+function coerceTokenArray(input) {
+  if (!input || typeof input !== "object") return [];
+  const list = Array.isArray(input) ? input : Object.values(input);
+  return list.filter((x) => !!x && typeof x === "object");
+}
+function rgbaToHex(c) {
+  const to = (v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0");
+  const base = `#${to(c.r)}${to(c.g)}${to(c.b)}`.toUpperCase();
+  return c.a !== void 0 && c.a < 1 ? `${base}${to(c.a)}`.toUpperCase() : base;
+}
+var round2 = (n) => Math.round(n * 100) / 100;
+var FLOAT_KIND_RULES = [
+  [/radius|corner|圆角/i, "radius"],
+  [/line[-_ ]?height|行高/i, "lineHeight"],
+  [/font[-_ ]?size|text[-_ ]?size|字号/i, "fontSize"],
+  [/space|spacing|gap|padding|margin|inset|gutter|间距|间隔/i, "spacing"]
+];
+function floatKindByName(name, collectionName = "") {
+  for (const [re, kind] of FLOAT_KIND_RULES) if (re.test(name)) return kind;
+  for (const [re, kind] of FLOAT_KIND_RULES) if (re.test(collectionName)) return kind;
+  return "spacing";
+}
+function expandFigmaVariables(variables, collections) {
+  const varList = coerceTokenArray(variables);
+  const varById = new Map(varList.map((v) => [v.id, v]));
+  const colById = new Map(coerceTokenArray(collections).map((c) => [c.id, c]));
+  const out = [];
+  const pendingAliases = [];
+  for (const v of varList) {
+    const col = v.variableCollectionId ? colById.get(v.variableCollectionId) : void 0;
+    const rawSegs = v.name.split("/").map((s) => s.trim()).filter(Boolean);
+    if (!rawSegs.length) continue;
+    const colName = col?.name?.trim() || "variables";
+    const rawNameSeg = rawSegs[rawSegs.length - 1];
+    const tier = TIER_RE.test(colName) ? colName : void 0;
+    const rawPathSegs = [...tier ? [] : [colName], ...rawSegs.slice(0, -1)];
+    const name = rawNameSeg;
+    const path = rawPathSegs.length ? rawPathSegs.join("/") : colName;
+    const modeNameOf = (modeId) => col?.modes?.find((m) => (m.id ?? m.modeId) === modeId)?.name ?? modeId;
+    for (const [modeId, raw] of Object.entries(v.valuesByMode)) {
+      if (raw === void 0 || raw === null) continue;
+      if (typeof raw === "object" && raw.type === "VARIABLE_ALIAS") {
+        const aliasId = raw.id;
+        if (aliasId) pendingAliases.push({ v, modeId, aliasId });
+        continue;
+      }
+      const cell = concreteCell(v, raw, colName);
+      if (!cell) continue;
+      out.push({
+        kind: cell.kind,
+        name,
+        path,
+        value: cell.value,
+        source: "variable",
+        description: v.description || void 0,
+        tokenId: v.id,
+        figmaName: v.name,
+        mode: modeNameOf(modeId),
+        tier,
+        isDefaultMode: col?.defaultModeId ? modeId === col.defaultModeId : void 0,
+        rawCode: v.codeSyntax?.WEB || v.codeSyntax?.iOS || v.codeSyntax?.ANDROID || void 0,
+        type: TOKEN_KIND_TO_TYPE[cell.kind]
+      });
+    }
+  }
+  resolveRestAliases(pendingAliases, varById, colById, out);
+  return out;
+}
+function concreteCell(v, raw, colName) {
+  if (v.resolvedType === "COLOR" && typeof raw === "object") {
+    const c = raw;
+    if (c.r === void 0 || c.g === void 0 || c.b === void 0) return null;
+    return { kind: "color", value: { kind: "color", hex: rgbaToHex(c) } };
+  }
+  if (v.resolvedType === "FLOAT" && typeof raw === "number") {
+    const kind = floatKindByName(v.name, colName);
+    return { kind, value: { kind, value: round2(raw), unit: "px" } };
+  }
+  return null;
+}
+function resolveRestAliases(pending, varById, colById, out) {
+  for (const { v, modeId, aliasId } of pending) {
+    const col = v.variableCollectionId ? colById.get(v.variableCollectionId) : void 0;
+    const modeName = col?.modes?.find((m) => (m.id ?? m.modeId) === modeId)?.name ?? modeId;
+    let cur = varById.get(aliasId);
+    let cell = null;
+    for (let hop = 0; cur && hop < 10; hop++) {
+      const curCol = cur.variableCollectionId ? colById.get(cur.variableCollectionId) : void 0;
+      const curColName = curCol?.name?.trim() || "variables";
+      const curModeId = curCol?.modes?.find((m) => m.name === modeName && (m.id ?? m.modeId))?.id ?? curCol?.modes?.find((m) => m.name === modeName && (m.id ?? m.modeId))?.modeId ?? curCol?.defaultModeId ?? Object.keys(cur.valuesByMode)[0];
+      const raw = cur.valuesByMode?.[curModeId];
+      if (raw === void 0 || raw === null) break;
+      if (typeof raw === "object" && raw.type === "VARIABLE_ALIAS") {
+        const nextId = raw.id;
+        if (!nextId) break;
+        cur = varById.get(nextId);
+        continue;
+      }
+      cell = concreteCell(cur, raw, curColName);
+      break;
+    }
+    if (!cell || !cur) continue;
+    const rawSegs = v.name.split("/").map((s) => s.trim()).filter(Boolean);
+    if (!rawSegs.length) continue;
+    const colName2 = col?.name?.trim() || "variables";
+    const tier = TIER_RE.test(colName2) ? colName2 : void 0;
+    const rawPathSegs = [...tier ? [] : [colName2], ...rawSegs.slice(0, -1)];
+    out.push({
+      kind: cell.kind,
+      name: rawSegs[rawSegs.length - 1],
+      path: rawPathSegs.length ? rawPathSegs.join("/") : colName2,
+      value: cell.value,
+      aliasRef: cur.name,
+      source: "variable",
+      description: v.description || void 0,
+      tokenId: v.id,
+      figmaName: v.name,
+      mode: modeName,
+      tier,
+      isDefaultMode: col?.defaultModeId ? modeId === col.defaultModeId : void 0,
+      rawCode: v.codeSyntax?.WEB || v.codeSyntax?.iOS || v.codeSyntax?.ANDROID || void 0,
+      type: TOKEN_KIND_TO_TYPE[cell.kind]
+    });
+  }
+}
+var MODE_TOP_RE = /^(light|dark|light-mode|dark-mode|lightmode|darkmode|浅色|深色|亮色|暗色)$/i;
+var TIER_RE = /^(primitives?|semantics?|components?|globals?|基础|语义|组件)$/i;
+function parseOne(text) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("JSON \u89E3\u6790\u5931\u8D25\uFF1A\u6587\u4EF6\u4E0D\u662F\u5408\u6CD5\u7684 JSON");
+  }
+  if (typeof data !== "object" || data === null) throw new Error("JSON \u5185\u5BB9\u4E3A\u7A7A\u6216\u683C\u5F0F\u4E0D\u6B63\u786E");
+  const rest = data;
+  const rawVars = rest.meta?.variables ?? rest.variables;
+  if (rawVars && typeof rawVars === "object") {
+    const varCount = (Array.isArray(rawVars) ? rawVars : Object.keys(rawVars)).length;
+    if (varCount > 0) {
+      const tokens = expandFigmaVariables(rawVars, rest.meta?.variableCollections ?? rest.variableCollections);
+      if (tokens.length) return { tokens, pending: [] };
+      throw new Error(
+        `\u8BC6\u522B\u5230 ${varCount} \u4E2A Figma \u53D8\u91CF\uFF0C\u4F46\u672A\u89E3\u6790\u51FA\u53EF\u7528 Token\uFF1A\u53EF\u80FD\u5168\u90E8\u4E3A\u522B\u540D\u5F15\u7528\uFF08VARIABLE_ALIAS\uFF09\u6216\u5B57\u7B26\u4E32/\u5E03\u5C14\u7C7B\u578B\u53D8\u91CF`
+      );
+    }
+  }
+  const pending = [];
+  return { tokens: parseDtcgTree(data, pending), pending };
+}
+function finishParsed(tokens, pending) {
+  resolveAliasTokens(tokens, pending);
+  if (!tokens.length) {
+    throw new Error(
+      "\u672A\u8BC6\u522B\u5230\u4EFB\u4F55 Token\uFF1A\u652F\u6301 Figma Variables \u5BFC\u51FA\u683C\u5F0F\uFF08meta.variables / variables \u952E\uFF09\u4E0E Tokens Studio / W3C DTCG \u5D4C\u5957\u683C\u5F0F\uFF08value/$value + type/$type\uFF09\uFF0C\u8BF7\u786E\u8BA4\u5BFC\u51FA\u7684 JSON \u6587\u4EF6\u5185\u5BB9"
+    );
+  }
+  return tokens;
+}
+function parseVariablesJsonBundle(entries) {
+  const tokens = [];
+  const pending = [];
+  for (const entry of entries) {
+    const one = parseOne(entry.text);
+    const fileName = (entry.name ?? "").replace(/\.json$/i, "").replace(/\.tokens$/i, "").trim();
+    if (TIER_RE.test(fileName)) {
+      const tier = fileName;
+      for (const t of one.tokens) if (!t.tier) t.tier = tier;
+      for (const p of one.pending) if (!p.tier) p.tier = tier;
+    }
+    tokens.push(...one.tokens);
+    pending.push(...one.pending);
+  }
+  return finishParsed(tokens, pending);
+}
+function readDtcgLeaf(rec) {
+  if (!("value" in rec || "$value" in rec)) return null;
+  const desc = rec.$description ?? rec.description;
+  const ext = rec.$extensions;
+  return {
+    value: rec.$value ?? rec.value,
+    type: rec.$type ?? rec.type,
+    description: typeof desc === "string" ? desc : void 0,
+    tokenId: typeof ext?.["com.figma.variableId"] === "string" ? ext["com.figma.variableId"] : void 0
+  };
+}
+function parseFigmaColorObject(v) {
+  const alpha = typeof v.alpha === "number" ? v.alpha : 1;
+  if (typeof v.hex === "string") {
+    const base = parseColorStr(v.hex);
+    if (!base) return null;
+    if (alpha < 1) {
+      const alphaHex = Math.round(alpha * 255).toString(16).padStart(2, "0").toUpperCase();
+      return `#${base.slice(1, 7)}${alphaHex}`;
+    }
+    return base;
+  }
+  const comps = v.components;
+  if (Array.isArray(comps) && comps.length >= 3 && comps.slice(0, 3).every((n) => typeof n === "number")) {
+    return rgbaToHex({ r: comps[0], g: comps[1], b: comps[2], a: alpha });
+  }
+  return null;
+}
+function parseDtcgTree(root, pending) {
+  const out = [];
+  const hasModeSplit = Object.keys(root).some((k) => MODE_TOP_RE.test(k.trim())) || Object.entries(root).some(
+    ([k, v]) => !k.startsWith("$") && TIER_RE.test(k.trim()) && typeof v === "object" && v !== null && Object.keys(v).some((kk) => MODE_TOP_RE.test(kk.trim()))
+  );
+  const walk = (node, segs, mode, tier) => {
+    for (const [key, val] of Object.entries(node)) {
+      if (key.startsWith("$")) continue;
+      if (typeof val !== "object" || val === null) continue;
+      const leaf = readDtcgLeaf(val);
+      if (leaf) {
+        emitDtcgLeaf(key, segs, mode, tier, leaf, out, pending);
+      } else {
+        const k = key.trim();
+        const isModeTop = !mode && !tier && segs.length === 0 && hasModeSplit && MODE_TOP_RE.test(k);
+        if (isModeTop) {
+          walk(val, segs, k, tier);
+          continue;
+        }
+        if (!tier && segs.length === 0 && TIER_RE.test(k)) {
+          walk(val, segs, mode, k);
+          continue;
+        }
+        walk(val, [...segs, key], mode, tier);
+      }
+    }
+  };
+  walk(root, [], void 0, void 0);
+  return out;
+}
+function parsePxNum(v) {
+  if (typeof v === "number") return Number.isFinite(v) ? v : void 0;
+  if (typeof v === "string") {
+    const m = v.trim().match(/^(-?\d*\.?\d+)\s*px$/i) ?? v.trim().match(/^(-?\d*\.?\d+)$/);
+    return m ? parseFloat(m[1]) : void 0;
+  }
+  return void 0;
+}
+function isColorLike(v) {
+  return /^#([0-9a-f]{3,8})$/i.test(v.trim()) || /^rgba?\(/i.test(v.trim());
+}
+function parseColorStr(v) {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  const hex = s.match(/^#([0-9a-f]{3,8})$/i);
+  if (hex) {
+    let h = hex[1];
+    if (h.length === 3) h = [...h].map((c) => c + c).join("");
+    if (h.length !== 6 && h.length !== 8) return null;
+    return `#${h.toUpperCase()}`;
+  }
+  const rgb = s.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+%?))?\s*\)$/i);
+  if (rgb) {
+    const a = rgb[4] === void 0 ? 1 : rgb[4].endsWith("%") ? parseFloat(rgb[4]) / 100 : parseFloat(rgb[4]);
+    return rgbaToHex({ r: parseFloat(rgb[1]) / 255, g: parseFloat(rgb[2]) / 255, b: parseFloat(rgb[3]) / 255, a });
+  }
+  return null;
+}
+function parseShadowLayers(v) {
+  const arr = Array.isArray(v) ? v : [v];
+  const layers = [];
+  for (const item of arr) {
+    if (typeof item !== "object" || item === null) return null;
+    const o = item;
+    const x = parsePxNum(o.offsetX ?? o.x);
+    const y = parsePxNum(o.offsetY ?? o.y);
+    const blur = parsePxNum(o.blur ?? o.radius);
+    const spread = parsePxNum(o.spread);
+    const color = parseColorStr(o.color);
+    if (x === void 0 || y === void 0 || blur === void 0 || !color) return null;
+    layers.push({ x: round2(x), y: round2(y), blur: round2(blur), spread: spread !== void 0 ? round2(spread) : void 0, color, inset: o.inset === true || void 0 });
+  }
+  return layers.length ? layers : null;
+}
+function parseBorderValue(v) {
+  if (typeof v !== "object" || v === null) return null;
+  const o = v;
+  const width = parsePxNum(o.width);
+  const color = parseColorStr(o.color);
+  if (width === void 0 || !color) return null;
+  return { width: round2(width), style: typeof o.style === "string" ? o.style : "solid", color };
+}
+function emitDtcgLeaf(key, segs, mode, tier, leaf, out, pending) {
+  const trimmed = typeof leaf.value === "string" ? leaf.value.trim() : "";
+  if (/^\{.+\}$/.test(trimmed)) {
+    pending.push({ ref: trimmed.slice(1, -1), key, segs, mode, tier, leaf });
+    return;
+  }
+  const v = leaf.value;
+  const tn = leaf.type?.toLowerCase();
+  const rawName = segs.length ? `${segs.join("/")}/${key}` : key;
+  const name = key;
+  const path = segs.join("/");
+  const push = (suffix, kind2, value) => {
+    out.push({
+      kind: kind2,
+      name: suffix ? `${name}.${suffix}` : name,
+      path,
+      value,
+      source: "variable",
+      description: leaf.description,
+      tokenId: leaf.tokenId,
+      figmaName: rawName,
+      mode,
+      tier,
+      type: TOKEN_KIND_TO_TYPE[kind2]
+    });
+  };
+  if (tn === "typography" && typeof v === "object" && v !== null) {
+    const tv = v;
+    const fs = parsePxNum(tv.fontSize);
+    if (fs !== void 0) push("fontSize", "fontSize", { kind: "fontSize", value: round2(fs), unit: "px" });
+    const lh = parsePxNum(tv.lineHeight);
+    if (lh !== void 0 && (typeof tv.lineHeight === "string" || lh >= 8))
+      push("lineHeight", "lineHeight", { kind: "lineHeight", value: round2(lh), unit: "px" });
+    return;
+  }
+  if (tn === "boxshadow" || tn === "othershadow" || tn === "shadow") {
+    const layers = parseShadowLayers(v);
+    if (layers) push(null, "shadow", { kind: "shadow", layers });
+    return;
+  }
+  if (tn === "border") {
+    const b = parseBorderValue(v);
+    if (b) push(null, "border", { kind: "border", ...b });
+    return;
+  }
+  if (tn === "color" || !tn && typeof v === "string" && isColorLike(v)) {
+    const hex = typeof v === "string" ? parseColorStr(v) : typeof v === "object" && v !== null ? parseFigmaColorObject(v) : null;
+    if (hex) push(null, "color", { kind: "color", hex });
+    return;
+  }
+  const n = parsePxNum(v);
+  if (n === void 0 || n < 0) return;
+  let kind;
+  if (tn === "borderradius" || tn === "radius") kind = "radius";
+  else if (tn === "fontsize" || tn === "fontsizes") kind = "fontSize";
+  else if (tn === "lineheight" || tn === "lineheights") kind = "lineHeight";
+  else kind = floatKindByName(key, segs[segs.length - 1] ?? "");
+  push(null, kind, { kind, value: round2(n), unit: "px" });
+}
+function resolveAliasTokens(out, pending) {
+  for (let round = 0; round < 10 && pending.length; round++) {
+    const byFull = /* @__PURE__ */ new Map();
+    const byName = /* @__PURE__ */ new Map();
+    const addTo = (m, k, t) => {
+      const list = m.get(k);
+      if (list) list.push(t);
+      else m.set(k, [t]);
+    };
+    for (const t of out) {
+      addTo(byFull, `${t.path}/${t.name}`, t);
+      if (t.tier) addTo(byFull, `${t.tier}/${t.path}/${t.name}`, t);
+      addTo(byName, t.name, t);
+    }
+    const rest = [];
+    let progressed = false;
+    for (const p of pending) {
+      const refSegs = p.ref.split(".").map((s) => s.trim()).filter(Boolean);
+      const pick = (list) => list && list.length ? list.find((t) => t.mode === p.mode) ?? list[0] : void 0;
+      const fullKeys = [];
+      if (refSegs.length > 1 && MODE_TOP_RE.test(refSegs[0])) fullKeys.push(refSegs.slice(1).join("/"));
+      fullKeys.push(refSegs.join("/"));
+      let target;
+      for (const k of fullKeys) {
+        target = pick(byFull.get(k));
+        if (target) break;
+      }
+      if (!target && refSegs.length) target = pick(byName.get(refSegs[refSegs.length - 1]));
+      if (!target) {
+        rest.push(p);
+        continue;
+      }
+      out.push({
+        kind: target.kind,
+        name: p.key,
+        path: p.segs.join("/"),
+        value: target.value,
+        aliasRef: p.ref,
+        source: "variable",
+        description: p.leaf.description,
+        tokenId: p.leaf.tokenId,
+        figmaName: p.segs.length ? `${p.segs.join("/")}/${p.key}` : p.key,
+        mode: p.mode,
+        tier: p.tier,
+        type: target.type ?? TOKEN_KIND_TO_TYPE[target.kind]
+      });
+      progressed = true;
+    }
+    pending.length = 0;
+    pending.push(...rest);
+    if (!progressed) break;
+  }
+}
+
+// ../../src/main/specSync.ts
+async function parseVariables(fileKey, pat) {
+  let lastErr;
+  for (const endpoint of ["local", "published"]) {
+    try {
+      const res = await figmaApi(`/files/${fileKey}/variables/${endpoint}`, pat);
+      const tokens = expandFigmaVariables(res.meta?.variables, res.meta?.variableCollections);
+      if (tokens.length) return tokens;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (lastErr) throw lastErr;
+  return [];
+}
+async function fetchAllStyleDocs(keys, pat) {
+  const out = new Array(keys.length).fill(null);
+  const BATCH = 6;
+  for (let i = 0; i < keys.length; i += BATCH) {
+    const slice = keys.slice(i, i + BATCH);
+    const docs = await Promise.all(
+      slice.map(async (k) => {
+        try {
+          const res = await figmaApi(`/styles/${k}`, pat);
+          return res.meta?.document ?? null;
+        } catch {
+          return null;
+        }
+      })
+    );
+    docs.forEach((d, j) => out[i + j] = d);
+  }
+  return out;
+}
+async function parseStyles(fileKey, pat) {
+  const res = await figmaApi(`/files/${fileKey}/styles`, pat);
+  const metas = (res.meta?.styles ?? []).filter((s) => s.styleType !== "GRID");
+  if (!metas.length) return [];
+  const docs = await fetchAllStyleDocs(
+    metas.map((s) => s.key),
+    pat
+  );
+  const out = [];
+  metas.forEach((meta, i) => {
+    const doc = docs[i];
+    if (!doc) return;
+    const solid = doc.fills?.find((f) => f.visible !== false && f.type === "SOLID" && f.color);
+    if (solid?.color) {
+      out.push({
+        kind: "color",
+        name: meta.name,
+        path: meta.name,
+        value: { kind: "color", hex: rgbaToHex(solid.color) },
+        source: "style",
+        description: meta.description || void 0
+      });
+    }
+    const ts = doc.style;
+    if (ts?.fontSize && ts.fontSize > 0) {
+      out.push({
+        kind: "fontSize",
+        name: `${meta.name}/fontSize`,
+        path: `${meta.name}/fontSize`,
+        value: { kind: "fontSize", value: round2(ts.fontSize), unit: "px" },
+        source: "style",
+        description: meta.description || void 0
+      });
+    }
+    if (ts?.lineHeightPx && ts.lineHeightPx > 0) {
+      out.push({
+        kind: "lineHeight",
+        name: `${meta.name}/lineHeight`,
+        path: `${meta.name}/lineHeight`,
+        value: { kind: "lineHeight", value: round2(ts.lineHeightPx), unit: "px" },
+        source: "style"
+      });
+    }
+    const layers = (doc.effects ?? []).filter((e) => e.visible !== false && e.type !== "LAYER_BLUR" && e.color).map((e) => ({
+      x: round2(e.offset?.x ?? 0),
+      y: round2(e.offset?.y ?? 0),
+      blur: round2(e.radius ?? 0),
+      spread: e.spread !== void 0 ? round2(e.spread) : void 0,
+      color: rgbaToHex(e.color),
+      inset: e.type === "INNER_SHADOW" || void 0
+    }));
+    if (layers.length) {
+      out.push({
+        kind: "shadow",
+        name: meta.name,
+        path: meta.name,
+        value: { kind: "shadow", layers },
+        source: "style",
+        description: meta.description || void 0
+      });
+    }
+  });
+  return out;
+}
+function collectHeuristics(root) {
+  const stats = /* @__PURE__ */ new Map();
+  const bump = (key, kind, value) => {
+    const hit = stats.get(key);
+    if (hit) hit.count += 1;
+    else stats.set(key, { count: 1, kind, value });
+  };
+  const visit = (node) => {
+    if (node.visible === false) return;
+    const solid = node.fills?.find((f) => f.visible !== false && f.type === "SOLID" && f.color);
+    if (solid?.color) bump(`color:${rgbaToHex(solid.color)}`, "color", { kind: "color", hex: rgbaToHex(solid.color) });
+    const radii = node.rectangleCornerRadii ?? (node.cornerRadius !== void 0 ? [node.cornerRadius] : []);
+    const uniq = [...new Set(radii.filter((r) => r > 0))];
+    if (uniq.length === 1)
+      bump(`radius:${uniq[0]}`, "radius", { kind: "radius", value: round2(uniq[0]), unit: "px" });
+    if (node.itemSpacing && node.itemSpacing > 0)
+      bump(`spacing:${node.itemSpacing}`, "spacing", {
+        kind: "spacing",
+        value: round2(node.itemSpacing),
+        unit: "px"
+      });
+    if (node.style?.fontSize && node.style.fontSize > 0)
+      bump(`fontSize:${node.style.fontSize}`, "fontSize", {
+        kind: "fontSize",
+        value: round2(node.style.fontSize),
+        unit: "px"
+      });
+    if (node.style?.lineHeightPx && node.style.lineHeightPx > 0)
+      bump(`lineHeight:${node.style.lineHeightPx}`, "lineHeight", {
+        kind: "lineHeight",
+        value: round2(node.style.lineHeightPx),
+        unit: "px"
+      });
+    const layers = (node.effects ?? []).filter((e) => e.visible !== false && e.color);
+    if (layers.length)
+      bump(
+        `shadow:${layers.map((e) => `${e.offset?.x ?? 0},${e.offset?.y ?? 0},${e.radius ?? 0},${rgbaToHex(e.color)}`).join("|")}`,
+        "shadow",
+        {
+          kind: "shadow",
+          layers: layers.map((e) => ({
+            x: round2(e.offset?.x ?? 0),
+            y: round2(e.offset?.y ?? 0),
+            blur: round2(e.radius ?? 0),
+            spread: e.spread !== void 0 ? round2(e.spread) : void 0,
+            color: rgbaToHex(e.color),
+            inset: e.type === "INNER_SHADOW" || void 0
+          }))
+        }
+      );
+    for (const child of node.children ?? []) visit(child);
+  };
+  visit(root);
+  return stats;
+}
+var HEURISTIC_TOP_N = 40;
+function parseHeuristic(fileKey, pat) {
+  return figmaApi(`/files/${fileKey}?depth=4`, pat).then((res) => {
+    const tokens = [];
+    if (!res.document) return { fileName: res.name ?? "", tokens };
+    const byKind = /* @__PURE__ */ new Map();
+    for (const entry of collectHeuristics(res.document).values()) {
+      const list = byKind.get(entry.kind) ?? [];
+      list.push(entry);
+      byKind.set(entry.kind, list);
+    }
+    for (const [kind, list] of byKind) {
+      list.sort((a, b) => b.count - a.count);
+      for (const { value } of list.slice(0, HEURISTIC_TOP_N)) {
+        const label = value.kind === "color" ? value.hex : value.kind === "shadow" ? `shadow-${tokens.filter((t) => t.kind === "shadow").length + 1}` : value.kind === "border" ? `${value.width}px ${value.style}` : `${value.value}px`;
+        tokens.push({
+          kind,
+          name: `${kind}/${label}`,
+          path: `heuristic/${kind}`,
+          value,
+          source: "heuristic"
+        });
+      }
+    }
+    return { fileName: res.name ?? "", tokens };
+  });
+}
+async function fetchFileName(fileKey, pat) {
+  try {
+    const res = await figmaApi(`/files/${fileKey}?depth=1`, pat);
+    return res.name ?? "";
+  } catch {
+    return "";
+  }
+}
+async function syncSpecTokens(input) {
+  const pat = (input.pat ?? "").trim();
+  if (!pat) throw new Error("\u672A\u914D\u7F6E Figma Personal Access Token\uFF0C\u8BF7\u5148\u5728\u300C\u8BBE\u7F6E \u2192 MCP \u7BA1\u7406\u300D\u4E2D\u586B\u5199");
+  const fileKey = extractFigmaFileKey(input.figmaUrl ?? "");
+  if (!fileKey) throw new Error("Figma \u89C4\u8303\u94FE\u63A5\u683C\u5F0F\u4E0D\u6B63\u786E");
+  const allLevels = [
+    { level: "variable", run: () => parseVariables(fileKey, pat) },
+    { level: "style", run: () => parseStyles(fileKey, pat) },
+    {
+      level: "heuristic",
+      run: async () => (await parseHeuristic(fileKey, pat)).tokens
+    }
+  ];
+  const order = allLevels.map((l) => l.level);
+  const startIdx = order.indexOf(input.startLevel ?? "variable");
+  const levels = allLevels.slice(Math.max(0, startIdx));
+  const degraded = [];
+  let lastErr;
+  for (const { level, run } of levels) {
+    try {
+      const tokens = await run();
+      if (tokens.length) {
+        return {
+          ok: true,
+          message: "",
+          fileName: await fetchFileName(fileKey, pat),
+          sourceLevel: level,
+          tokens,
+          degraded
+        };
+      }
+      lastErr = new Error(`\u8BE5\u7EA7\u522B\u65E0\u53EF\u7528\u6570\u636E\uFF1A${level}`);
+    } catch (err) {
+      lastErr = err;
+      const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+      if (level === "variable" && /403|file_variables/i.test(msg)) {
+        return {
+          ok: false,
+          message: msg,
+          variableDenied: true,
+          degraded: [
+            {
+              level,
+              reason: msg,
+              hint: "Figma \u53D8\u91CF API \u4EC5\u5BF9 Enterprise \u5957\u9910\u5F00\u653E\uFF08file_variables:read \u4E3A Enterprise \u4E13\u5C5E\u6743\u9650\uFF09\uFF0C\u65E0\u6CD5\u5BFC\u5165\u81EA\u5EFA Token\uFF08\u53D8\u91CF\uFF09"
+            }
+          ]
+        };
+      }
+    }
+    degraded.push({
+      level,
+      reason: lastErr instanceof Error ? lastErr.message : String(lastErr),
+      // 变量级 403 = PAT 缺 file_variables:read；该 scope 为 Figma Enterprise 套餐专属，普通套餐生成令牌时无此选项，重新生成也无法勾选
+      hint: level === "variable" ? /403|file_variables/i.test(lastErr instanceof Error ? lastErr.message : String(lastErr)) ? "Figma \u53D8\u91CF API \u4EC5\u5BF9 Enterprise \u5957\u9910\u5F00\u653E\uFF08file_variables:read \u4E3A Enterprise \u4E13\u5C5E\u6743\u9650\uFF09\u3002\u5EFA\u8BAE\u6539\u7528\u53D8\u91CF\u5BFC\u51FA\u63D2\u4EF6\u751F\u6210 JSON \u540E\u5728\u300C\u5BFC\u5165 JSON\u300D\u4E2D\u5BFC\u5165\uFF08\u652F\u6301\u4E09\u5C42 Token \u4F53\u7CFB\u4E0E\u522B\u540D\u89E3\u6790\uFF09\uFF1B\u5982\u4E3A Enterprise \u5957\u9910\uFF0C\u8BF7\u786E\u8BA4\u4EE4\u724C\u5DF2\u52FE\u9009\u300C\u8BFB\u53D6\u53D8\u91CF\u300D\u6743\u9650\u540E\u91CD\u8BD5" : "\u5F53\u524D\u6587\u4EF6\u672A\u8BFB\u53D6\u5230 Figma \u53D8\u91CF\uFF08\u53EF\u80FD\u53D8\u91CF\u90FD\u6765\u81EA\u7EC4\u4EF6\u5E93\u6216\u672A\u5B9A\u4E49\u672C\u5730\u53D8\u91CF\uFF09\uFF0C\u5DF2\u964D\u7EA7\u4E3A\u6837\u5F0F\u89E3\u6790\uFF1B\u5EFA\u8BAE\u5728\u53D8\u91CF\u5E93\u6587\u4EF6\u4E0A\u540C\u6B65\uFF0C\u6216\u7528 Figma Variables \u63D2\u4EF6\u5BFC\u51FA JSON \u540E\u5BFC\u5165" : void 0
+    });
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+// ../../src/shared/tokenExport.ts
+function valueText(v) {
+  if (v.kind === "color") return v.hex;
+  if (v.kind === "shadow")
+    return v.layers.map((l) => `${l.inset ? "inset " : ""}${l.x}px ${l.y}px ${l.blur}px ${l.spread ?? 0}px ${l.color}`).join(", ");
+  if (v.kind === "border") return `${v.width}px ${v.style} ${v.color}`;
+  return `${v.value}px`;
+}
+function toKebab(seg) {
+  return seg.replace(/([a-z0-9])([A-Z])/g, "$1-$2").replace(/[\s_.]+/g, "-").toLowerCase();
+}
+function toCamel(seg) {
+  const words = seg.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  if (!words.length) return "x";
+  return words[0].toLowerCase() + words.slice(1).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join("");
+}
+function dtcgLeaf(t) {
+  const v = t.value;
+  if (v.kind === "color") return { $value: v.hex, $type: "color", $name: t.name };
+  if (v.kind === "shadow") {
+    const layer = (l) => ({
+      color: l.color,
+      offsetX: `${l.x}px`,
+      offsetY: `${l.y}px`,
+      blur: `${l.blur}px`,
+      spread: `${l.spread ?? 0}px`,
+      inset: Boolean(l.inset)
+    });
+    return {
+      $value: v.layers.length === 1 ? layer(v.layers[0]) : v.layers.map(layer),
+      $type: "shadow",
+      $name: t.name
+    };
+  }
+  if (v.kind === "border")
+    return { $value: { color: v.color, width: `${v.width}px`, style: v.style }, $type: "border", $name: t.name };
+  return { $value: `${v.value}px`, $type: "dimension", $name: t.name };
+}
+function buildDtcgTree(tokens) {
+  const root = {};
+  for (const t of tokens) {
+    const segs = t.path.split("/").filter(Boolean);
+    if (!segs.length) continue;
+    let node = root;
+    for (let i = 0; i < segs.length - 1; i++) {
+      const k = segs[i];
+      if (typeof node[k] !== "object" || node[k] === null) node[k] = {};
+      node = node[k];
+    }
+    node[segs[segs.length - 1]] = dtcgLeaf(t);
+  }
+  return root;
+}
+function exportCss(tokens) {
+  const seen = /* @__PURE__ */ new Map();
+  for (const t of tokens) {
+    const varName = `--${t.path.split("/").filter(Boolean).map(toKebab).join("-")}`;
+    seen.set(varName, valueText(t.value));
+  }
+  const lines = [...seen.entries()].map(([k, v]) => `  ${k}: ${v};`);
+  return `:root {
+${lines.join("\n")}
+}
+`;
+}
+var TW_GROUP = {
+  color: "colors",
+  spacing: "spacing",
+  fontSize: "fontSize",
+  lineHeight: "lineHeight",
+  radius: "borderRadius",
+  shadow: "boxShadow",
+  border: "borderWidth"
+};
+function twValue(t) {
+  const v = t.value;
+  if (v.kind === "color") return v.hex;
+  if (v.kind === "shadow")
+    return v.layers.map(
+      (l) => `${l.inset ? "inset " : ""}${l.x}px ${l.y}px ${l.blur}px ${l.spread ?? 0}px ${l.color}`
+    );
+  if (v.kind === "border") return `${v.width}px`;
+  return `${v.value}px`;
+}
+function buildTwTree(tokens) {
+  const groups = {};
+  for (const t of tokens) {
+    const segs = t.path.split("/").filter(Boolean);
+    if (!segs.length) continue;
+    const group = groups[TW_GROUP[t.kind]] ??= {};
+    let node = group;
+    for (let i = 0; i < segs.length - 1; i++) {
+      const k = toCamel(segs[i]);
+      if (typeof node[k] !== "object" || node[k] === null) node[k] = {};
+      node = node[k];
+    }
+    node[toCamel(segs[segs.length - 1])] = twValue(t);
+  }
+  return groups;
+}
+function serTw(obj, depth) {
+  const padIn = "  ".repeat(depth + 1);
+  return Object.entries(obj).map(([k, v]) => {
+    if (typeof v === "string") return `${padIn}'${k}': '${v}'`;
+    if (Array.isArray(v)) return `${padIn}'${k}': [${v.map((s) => `'${s}'`).join(", ")}]`;
+    return `${padIn}'${k}': {
+${serTw(v, depth + 1)}
+${padIn}}`;
+  }).join(",\n");
+}
+function exportTailwind(tokens) {
+  const extend = buildTwTree(tokens);
+  return `/** Generated by UI \u8D70\u67E5\u5DE5\u5177\uFF08\u8BBE\u8BA1\u89C4\u8303\u5BFC\u51FA\uFF09\uFF0C\u53EF\u5408\u5E76\u8FDB tailwind.config.js */
+module.exports = {
+  theme: {
+    extend: {
+${serTw(extend, 2)}
+    }
+  }
+}
+`;
+}
+function exportJson(tokens) {
+  return `${JSON.stringify(buildDtcgTree(tokens), null, 2)}
+`;
+}
+function exportTokens(tokens, fmt) {
+  if (fmt === "css") return exportCss(tokens);
+  if (fmt === "tailwind") return exportTailwind(tokens);
+  return exportJson(tokens);
 }
 
 // ../../src/renderer/src/spec/specCheck.ts
@@ -1391,6 +2202,45 @@ async function main() {
           ok: true,
           findings: findings.map((f) => ({ ...f, node: nodeRef(f.node) }))
         };
+        break;
+      }
+      case "spec-sync": {
+        if (typeof input.proxy === "string") setFigmaCustomProxy(input.proxy);
+        try {
+          out = await syncSpecTokens({
+            pat: input.pat,
+            figmaUrl: input.figmaUrl,
+            startLevel: input.startLevel
+          });
+        } catch (err) {
+          out = { ok: false, message: err instanceof Error ? err.message : String(err) };
+        }
+        break;
+      }
+      case "figma-file-meta": {
+        if (typeof input.proxy === "string") setFigmaCustomProxy(input.proxy);
+        const fileKeys = Array.isArray(input.fileKeys) ? input.fileKeys.filter(Boolean) : [];
+        const metas = [];
+        for (const fileKey of fileKeys) {
+          const meta = await fetchFigmaFileMeta(fileKey, input.pat);
+          metas.push({ fileKey, ...meta });
+        }
+        out = { ok: true, metas };
+        break;
+      }
+      case "spec-import-json": {
+        const files = Array.isArray(input.files) ? input.files : [];
+        if (!files.length)
+          throw new Error("\u672A\u8BC6\u522B\u5230\u4EFB\u4F55 Token\uFF1A\u652F\u6301 Figma Variables \u5BFC\u51FA\u683C\u5F0F\uFF08meta.variables / variables \u952E\uFF09\u4E0E Tokens Studio / W3C DTCG \u5D4C\u5957\u683C\u5F0F\uFF08value/$value + type/$type\uFF09\uFF0C\u8BF7\u786E\u8BA4\u5BFC\u51FA\u7684 JSON \u6587\u4EF6\u5185\u5BB9");
+        const tokens = parseVariablesJsonBundle(files);
+        out = { ok: true, tokens };
+        break;
+      }
+      case "export-tokens": {
+        const tokens = Array.isArray(input.tokens) ? input.tokens : [];
+        const format = String(input.format ?? "json");
+        if (!["json", "css", "tailwind"].includes(format)) throw new Error(`\u4E0D\u652F\u6301\u7684\u5BFC\u51FA\u683C\u5F0F\uFF1A${format}`);
+        out = { ok: true, text: exportTokens(tokens, format) };
         break;
       }
       default:

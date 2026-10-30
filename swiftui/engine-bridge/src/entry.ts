@@ -11,12 +11,19 @@
  *  - check-spec       设计规范 Token 校验（Token 列表由 Swift 侧从 SwiftData 组装）
  *  - check-elements   元素清单一致性校验（图片加载失败 / 元素缺失 / 文案不一致）
  *  - check-a11y       无障碍检查
+ *  - spec-sync        Figma Token 三级解析（Variables → Styles → 启发式；variableDenied 时 ok=false 透传）
+ *  - figma-file-meta  批量轻量读取 Figma 文件 last_modified（检查更新）
+ *  - spec-import-json Token JSON 导入解析（Figma REST 同构 / Tokens Studio / W3C DTCG）
+ *  - export-tokens    Token 多格式导出（json / css / tailwind）
  */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { matchNodes } from '../../../src/main/matcher'
 import { computeDiffs } from '../../../src/main/diff'
 import { normalizeTolerance } from '../../../src/shared/types'
-import { fetchFigmaDesign, fetchFigmaNodeSize, setFigmaCustomProxy } from '../../../src/main/figma'
+import { fetchFigmaDesign, fetchFigmaFileMeta, fetchFigmaNodeSize, setFigmaCustomProxy } from '../../../src/main/figma'
+import { syncSpecTokens } from '../../../src/main/specSync'
+import { parseVariablesJsonBundle } from '../../../src/shared/variablesImport'
+import { exportTokens } from '../../../src/shared/tokenExport'
 import { checkSpec } from '../../../src/renderer/src/spec/specCheck'
 import { checkElements } from '../../../src/renderer/src/spec/elementCheck'
 import { checkA11y } from '../../../src/renderer/src/spec/a11yCheck'
@@ -112,6 +119,48 @@ async function main(): Promise<void> {
           ok: true,
           findings: findings.map((f) => ({ ...f, node: nodeRef(f.node as AnyRecord) }))
         }
+        break
+      }
+      case 'spec-sync': {
+        if (typeof input.proxy === 'string') setFigmaCustomProxy(input.proxy)
+        // syncSpecTokens 失败会 throw（PAT 缺失 / 链接不合法 / 全级无数据），包为 ok=false 透传；
+        // variableDenied（变量级 403）时内部返回 ok=false 且 variableDenied=true，同样透传
+        try {
+          out = (await syncSpecTokens({
+            pat: input.pat,
+            figmaUrl: input.figmaUrl,
+            startLevel: input.startLevel
+          })) as AnyRecord
+        } catch (err) {
+          out = { ok: false, message: err instanceof Error ? err.message : String(err) }
+        }
+        break
+      }
+      case 'figma-file-meta': {
+        if (typeof input.proxy === 'string') setFigmaCustomProxy(input.proxy)
+        const fileKeys: string[] = Array.isArray(input.fileKeys) ? input.fileKeys.filter(Boolean) : []
+        // 串行避免 Figma 限流（对齐主进程 spec:checkUpdates IPC）
+        const metas: AnyRecord[] = []
+        for (const fileKey of fileKeys) {
+          const meta = await fetchFigmaFileMeta(fileKey, input.pat)
+          metas.push({ fileKey, ...meta })
+        }
+        out = { ok: true, metas }
+        break
+      }
+      case 'spec-import-json': {
+        const files: { text: string; name?: string }[] = Array.isArray(input.files) ? input.files : []
+        if (!files.length)
+          throw new Error('未识别到任何 Token：支持 Figma Variables 导出格式（meta.variables / variables 键）与 Tokens Studio / W3C DTCG 嵌套格式（value/$value + type/$type），请确认导出的 JSON 文件内容')
+        const tokens = parseVariablesJsonBundle(files)
+        out = { ok: true, tokens }
+        break
+      }
+      case 'export-tokens': {
+        const tokens: AnyRecord[] = Array.isArray(input.tokens) ? input.tokens : []
+        const format = String(input.format ?? 'json')
+        if (!['json', 'css', 'tailwind'].includes(format)) throw new Error(`不支持的导出格式：${format}`)
+        out = { ok: true, text: exportTokens(tokens as any, format as 'json' | 'css' | 'tailwind') }
         break
       }
       default:

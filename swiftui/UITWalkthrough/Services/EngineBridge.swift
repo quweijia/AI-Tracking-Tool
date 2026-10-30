@@ -267,6 +267,19 @@ enum EngineBridge {
         return try JSONDecoder().decode(T.self, from: stdout)
     }
 
+    /// 异步调用子命令（不校验 ok 字段）：spec-sync 的 variableDenied 分支返回 ok=false 且携带降级结构，需要原样解码透传
+    static func runRaw<T: Decodable>(
+        command: String,
+        payload: [String: Any],
+        as type: T.Type
+    ) async throws -> T {
+        let stdin = try JSONSerialization.data(withJSONObject: payload)
+        let stdout = try await Task.detached(priority: .userInitiated) {
+            try runSyncRaw(command: command, stdin: stdin)
+        }.value
+        return try JSONDecoder().decode(T.self, from: stdout)
+    }
+
     // MARK: - 子命令便捷封装
 
     /// 结构化样式比对（镜像 walkthrough:compare IPC；pairs 不回传）

@@ -29,7 +29,7 @@ struct RootView: View {
             case .reports:
                 ComingSoonView(title: "分析报告", hint: "对应 Electron 版 ReportsPage")
             case .specs:
-                ComingSoonView(title: "设计规范空间", hint: "对应 Electron 版 SpecCategoryPage（端分类 / 规范套 / Token 版本）")
+                SpecSpaceView()
             case .settings:
                 ComingSoonView(title: "设置", hint: "对应 Electron 版 Settings（容差 / AI 模型 / 云文档 / MCP）")
             }
