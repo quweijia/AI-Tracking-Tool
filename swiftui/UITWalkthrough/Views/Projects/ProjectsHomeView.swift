@@ -259,7 +259,7 @@ struct ProjectSheet: View {
                     platforms.contains(p) ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor),
                     in: Capsule()
                 )
-                .overlay(Capsule().strokeBorder(platforms.contains(p) ? Color.accentColor : .separator))
+                .overlay(Capsule().strokeBorder(platforms.contains(p) ? Color.accentColor : Color(nsColor: .separatorColor)))
                 .foregroundStyle(platforms.contains(p) ? Color.accentColor : Color.primary)
         }
         .buttonStyle(.plain)
@@ -273,7 +273,7 @@ struct ProjectSheet: View {
                 .fill(hex.map { colorFromHex($0) ?? Color.gray } ?? Color(nsColor: .controlBackgroundColor))
                 .frame(width: 20, height: 20)
                 .overlay(
-                    Circle().strokeBorder(logoColor == hex ? Color.primary : .separator, lineWidth: logoColor == hex ? 2 : 1)
+                    Circle().strokeBorder(logoColor == hex ? Color.primary : Color(nsColor: .separatorColor), lineWidth: logoColor == hex ? 2 : 1)
                 )
         }
         .buttonStyle(.plain)

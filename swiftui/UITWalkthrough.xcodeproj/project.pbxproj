@@ -64,6 +64,9 @@
 			productName = UITWalkthrough;
 			productReference = 4C1A0000000000000000000A /* UITWalkthrough.app */;
 			productType = "com.apple.product-type.application";
+			fileSystemSynchronizedGroups = (
+				4C1A00000000000000000001 /* UITWalkthrough */,
+			);
 		};
 /* End PBXNativeTarget section */
 
@@ -199,6 +202,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.quweijia.uitwalkthrough;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 6.0;
 			};

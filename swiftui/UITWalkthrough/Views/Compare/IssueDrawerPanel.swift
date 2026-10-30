@@ -135,12 +135,12 @@ struct IssueDrawerPanel: View {
 
     private var filtered: [(issue: Issue, no: Int)] {
         sortedNumbered.filter { entry in
-            switch filter {
+            let matched = switch filter {
             case .open: !isDone(entry.issue)
             case .done: isDone(entry.issue)
             case .all: true
             }
-            && (sourceFilter == .all || displaySource(entry.issue) == IssueSource(rawValue: sourceFilter.rawValue))
+            return matched && (sourceFilter == .all || displaySource(entry.issue) == IssueSource(rawValue: sourceFilter.rawValue))
         }
     }
 
@@ -738,7 +738,7 @@ struct ReverifySheet: View {
                         .frame(width: 2)
                         .shadow(color: .black.opacity(0.35), radius: 1)
                         .position(
-                            x: (geo.size.width - fittedWidth(geo: geo.size)) / 2 + fittedWidth(geo: geo.size) * slider / 100,
+                            x: (geo.size.width - fittedWidth(geo: geo.size)) / 2 + fittedWidth(geo: geo.size) * CGFloat(slider) / 100,
                             y: geo.size.height / 2
                         )
                 } else if let fix = fixImage {

@@ -257,8 +257,8 @@ struct CompareWorkbenchView: View {
 
     @ViewBuilder
     private var focusBar: some View {
-        if let focusIssue {
-            let desc = focusIssue.issueDescription
+        if let focused = focusIssue {
+            let desc = focused.issueDescription
             HStack(spacing: 8) {
                 Image(systemName: "scope")
                 Text("正在聚焦查看：\(desc.count > 32 ? String(desc.prefix(32)) + "…" : desc)")
@@ -366,7 +366,7 @@ struct CompareWorkbenchView: View {
             Button {
                 history.redo(context: context, pageId: page?.id)
             } label: { EmptyView() }
-            .keyboardShortcut("z", modifiers: .command.shift)
+            .keyboardShortcut("z", modifiers: [.command, .shift])
         }
         .frame(width: 0, height: 0)
         .opacity(0)

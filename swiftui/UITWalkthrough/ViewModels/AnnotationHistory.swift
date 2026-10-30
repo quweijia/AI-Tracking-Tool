@@ -92,7 +92,9 @@ struct IssueSnapshot {
             createdAt: createdAt
         ).applying(self)
     }
+}
 
+extension Issue {
     /// 把快照值写回已有实例（撤销"编辑/移动"时整条还原）
     @discardableResult
     func applying(_ snapshot: IssueSnapshot) -> Issue {
@@ -134,6 +136,12 @@ enum AnnotationHistoryOp {
     case add([IssueSnapshot])
     case delete([IssueSnapshot])
     case update(before: IssueSnapshot, after: IssueSnapshot)
+
+    /// 是否为新增操作（撤销/重做方向判断用）
+    var isAdd: Bool {
+        if case .add = self { return true }
+        return false
+    }
 }
 
 /// 标注撤销/重做历史栈（上限 50 步，切页清空；Cmd+Z 撤销、Cmd+Shift+Z 重做）
@@ -189,9 +197,14 @@ final class AnnotationHistory {
         try? context.save()
     }
 
-    private var isAdd: Bool {
-        if case .add = self { return true }
-        return false
+    /// 触碰页面（updatedAt 驱动项目列表「最近更新」；save 由调用方统一执行）
+    private func touch(pageId: String?, context: ModelContext) {
+        guard let pageId else { return }
+        var descriptor = FetchDescriptor<WalkthroughPage>(predicate: #Predicate { $0.id == pageId })
+        descriptor.fetchLimit = 1
+        if let page = try? context.fetch(descriptor).first {
+            page.updatedAt = nowMs()
+        }
     }
 
     /// 存在同 id 则写值还原，否则重建（覆盖"先删后撤"边界）

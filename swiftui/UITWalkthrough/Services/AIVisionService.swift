@@ -254,11 +254,11 @@ enum AIVisionService {
         idleMs: Double,
         proxy: String?,
         extraBody: [String: Any]?,
-        onProgress: @escaping (Int, Double) async -> Void
+        onProgress: @escaping @MainActor (Int, Double) async -> Void
     ) async throws -> AIChatResult {
         let url = chatURL(model.baseUrl)
         let body = chatBody(model: model, messages: messages, maxTokens: maxTokens, stream: true, extraBody: extraBody)
-        let request = try makeRequest(url: url, model: model, body: body)
+        var request = try makeRequest(url: url, model: model, body: body)
         request.timeoutInterval = timeoutMs / 1000
 
         func openStream(_ useProxy: Bool) async throws -> (URLSession.AsyncBytes, Int) {
@@ -457,7 +457,8 @@ enum AIVisionService {
     - severity：major=明显影响视觉/可用，必须改；minor=一般差异，应该改；suggestion=可优化的细节
     - category：typography=文字类与排版 / spacing=对齐布局与间距 / color=色彩 / style=图标图片与组件状态样式 / interaction=交互状态缺失（如 hover/禁用/报错态）/ compatibility=适配异常。按问题最贴切的一项选择
     - suggestion：current=开发现状描述，fix=建议改法，properties=涉及的 CSS 属性（可选，如 color、line-height、text-overflow）
-    - 控制在 15 个问题以内，按影响从大到小排序；对比后确实无问题时输出 {"issues":[]}"""
+    - 控制在 15 个问题以内，按影响从大到小排序；对比后确实无问题时输出 {"issues":[]}
+"""
 
     /// 自动走查检查项注入 prompt（对齐 walkOptionsPrompt）
     static func walkOptionsPrompt(_ wo: WalkOptionsInput?) -> String {
@@ -527,7 +528,7 @@ enum AIVisionService {
         shotPNG: Data,
         skillGuides: [String] = [],
         walkOptions: WalkOptionsInput? = nil,
-        onProgress: @escaping (Int, Double) async -> Void
+        onProgress: @escaping @MainActor (Int, Double) async -> Void
     ) async -> AIAnnotateResult {
         do {
             let model = try getModel(modelId)
@@ -570,7 +571,7 @@ enum AIVisionService {
                 var lastEmit = 0.0
             }
             let throttle = Throttle()
-            let progress: (Int, Double) async -> Void = { chars, elapsedMs in
+            let progress: @MainActor (Int, Double) async -> Void = { chars, elapsedMs in
                 let now = nowMs()
                 guard now - throttle.lastEmit >= 500 else { return }
                 throttle.lastEmit = now

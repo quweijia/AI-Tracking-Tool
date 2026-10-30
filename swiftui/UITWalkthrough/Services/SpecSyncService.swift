@@ -159,8 +159,8 @@ extension EngineBridge {
     }
 
     /// Token 多格式导出（json / css / tailwind；tokens 元素形如 {kind, name, path, value}）
-    static func exportTokens(_ tokens: [[String: Any]], format: String) async throws -> String {
-        let payload: [String: Any] = ["tokens": tokens, "format": format]
+    static func exportTokens(_ tokens: EngineJSONBox, format: String) async throws -> String {
+        let payload: [String: Any] = ["tokens": tokens.values, "format": format]
         return try await run(command: "export-tokens", payload: payload, as: EngineExportTokensDTO.self).text
     }
 }
@@ -296,7 +296,8 @@ enum SpecStore {
         if opts.mode == .merge, let prev {
             var map: [String: ParsedTokenRow] = [:]
             for r in tokens(ctx, versionId: prev.id) {
-                map[r.diffKey] = ParsedTokenRow(row: r)
+                let parsed = ParsedTokenRow(row: r)
+                map[parsed.diffKey] = parsed
             }
             for (i, t) in rows.enumerated() {
                 var t = t
@@ -305,7 +306,7 @@ enum SpecStore {
             }
             effective = map.values.sorted { ($0.sortNo ?? 0) < ($1.sortNo ?? 0) }
         }
-        let prevKeys = prev.map { Set(tokens(ctx, versionId: $0.id).map(\.diffKey)) } ?? []
+        let prevKeys = prev.map { Set(tokens(ctx, versionId: $0.id).map { ParsedTokenRow(row: $0).diffKey }) } ?? []
         let nextKeys = effective.map(\.diffKey)
         let nextSet = Set(nextKeys)
         let added = nextKeys.filter { !prevKeys.contains($0) }.count
@@ -480,7 +481,9 @@ enum SpecStore {
                 )
             )
         }
-        if let spec = try? ctx.fetchModel(DesignSpec.self, id: specId) {
+        var specDescriptor = FetchDescriptor<DesignSpec>(predicate: #Predicate { $0.id == specId })
+        specDescriptor.fetchLimit = 1
+        if let spec = try? ctx.fetch(specDescriptor).first {
             spec.lastSyncedAt = now
         }
         try ctx.save()

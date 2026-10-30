@@ -548,10 +548,10 @@ private struct ArrowLineShape: Shape {
 private struct WhiteHalo: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .shadow(.drop(color: .white, radius: 1.5, x: 0.8, y: 0.8))
-            .shadow(.drop(color: .white, radius: 1.5, x: -0.8, y: 0.8))
-            .shadow(.drop(color: .white, radius: 1.5, x: 0.8, y: -0.8))
-            .shadow(.drop(color: .white, radius: 1.5, x: -0.8, y: -0.8))
+            .shadow(color: .white, radius: 1.5, x: 0.8, y: 0.8)
+            .shadow(color: .white, radius: 1.5, x: -0.8, y: 0.8)
+            .shadow(color: .white, radius: 1.5, x: 0.8, y: -0.8)
+            .shadow(color: .white, radius: 1.5, x: -0.8, y: -0.8)
     }
 }
 

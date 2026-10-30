@@ -178,14 +178,14 @@ struct FolderSheet: View {
                         Circle()
                             .fill(Color(nsColor: .controlBackgroundColor))
                             .frame(width: 20, height: 20)
-                            .overlay(Circle().strokeBorder(color == nil ? Color.primary : .separator))
+                            .overlay(Circle().strokeBorder(color == nil ? Color.primary : Color(nsColor: .separatorColor)))
                             .onTapGesture { color = nil }
                             .help("自动")
                         ForEach(Self.colorPresets, id: \.self) { hex in
                             Circle()
                                 .fill(colorFromHex(hex) ?? Color.gray)
                                 .frame(width: 20, height: 20)
-                                .overlay(Circle().strokeBorder(color == hex ? Color.primary : .separator))
+                                .overlay(Circle().strokeBorder(color == hex ? Color.primary : Color(nsColor: .separatorColor)))
                                 .onTapGesture { color = hex }
                         }
                     }

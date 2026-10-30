@@ -232,7 +232,7 @@ enum DocxBuilder {
         body.append(wRuns([RunOpts(text: p.title, bold: true, sizeHalf: 36)], "<w:jc w:val=\"center\"/><w:spacing w:after=\"200\"/>"))
         // 元信息行：灰色小字，行距与段后间距拉开
         for line in p.metaLines {
-            body.append(wRuns([RunOpts(text: line, color: "595959", sizeHalf: 20)], "<w:spacing w:after=\"60\" w:line=\"312\" w:lineRule=\"auto\"/>"))
+            body.append(wRuns([RunOpts(text: line, sizeHalf: 20, color: "595959")], "<w:spacing w:after=\"60\" w:line=\"312\" w:lineRule=\"auto\"/>"))
         }
         // 统计表：100% 页宽等宽格子，浅蓝底
         if !p.stats.isEmpty {
@@ -241,7 +241,7 @@ enum DocxBuilder {
             body.append(wGridTable(
                 widths,
                 [p.stats.enumerated().map { i, s in
-                    wCell(TCellOpts(text: "\(s.label)：\(s.value)", bold: true, sizeHalf: 20, width: widths[i], fill: "E8EEF9"))
+                    wCell(TCellOpts(text: "\(s.label)：\(s.value)", bold: true, sizeHalf: 20, fill: "E8EEF9", width: widths[i]))
                 }]
             ))
         }
@@ -251,7 +251,7 @@ enum DocxBuilder {
             body.append(wP("问题明细", RunOpts(text: "", bold: true, sizeHalf: 28), "<w:spacing w:before=\"280\" w:after=\"140\"/>"))
             let cols = [600, 3200, 950, 1150, 1150, 926, 1050]
             func head(_ t: String, _ i: Int) -> String {
-                wCell(TCellOpts(text: t, bold: true, sizeHalf: 18, width: cols[i], fill: "E8EEF9"))
+                wCell(TCellOpts(text: t, bold: true, sizeHalf: 18, fill: "E8EEF9", width: cols[i]))
             }
             var rows: [[String]] = [[
                 head("编号", 0), head("标题", 1), head("严重度", 2), head("类别", 3), head("来源", 4), head("目标", 5), head("状态", 6)
@@ -267,7 +267,7 @@ enum DocxBuilder {
                 if let sug = i.suggestion {
                     rows.append([wCell(TCellOpts(
                         text: "建议　现状：\(sug.current)　改法：\(sug.fix)",
-                        sizeHalf: 18, color: "595959", span: 7, fill: "FAFBFD"
+                        sizeHalf: 18, color: "595959", fill: "FAFBFD", span: 7
                     ))])
                 }
             }
@@ -306,7 +306,7 @@ enum DocxBuilder {
             body.append(wRuns(
                 [RunOpts(
                     text: "注：交互式 HTML 报告（图上标注定位、研发回应与修改报告导出）无法作为附件随腾讯文档携带，请在应用「导出报告」页点「导出 HTML 报告」获取完整版本。",
-                    color: "808080", sizeHalf: 18
+                    sizeHalf: 18, color: "808080"
                 )],
                 "<w:spacing w:before=\"240\"/>"
             ))

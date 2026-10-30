@@ -144,24 +144,24 @@ private struct SideBySideCanvas: View {
                 issues: designIssues, pixelSize: designPixelSize,
                 help: "重新选择设计稿图片"
             ) { offset in
-                sync(to: shotPos, from: offset)
+                sync(to: $shotPos, from: offset)
             }
             canvasPanel(
                 title: "开发截图", image: shotImage, target: .screenshot,
                 issues: shotIssues, pixelSize: shotPixelSize,
                 help: "重新选择开发截图"
             ) { offset in
-                sync(to: designPos, from: offset)
+                sync(to: $designPos, from: offset)
             }
         }
         .padding(.horizontal, 8)
         .padding(.top, 8)
     }
 
-    private func sync(to target: ScrollPosition, from offset: CGPoint) {
+    private func sync(to target: Binding<ScrollPosition>, from offset: CGPoint) {
         guard model.syncScroll, !syncing else { return }
         syncing = true
-        target.scrollTo(x: offset.x, y: offset.y)
+        target.wrappedValue.scrollTo(x: offset.x, y: offset.y)
         DispatchQueue.main.async { syncing = false }
     }
 

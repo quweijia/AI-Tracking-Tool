@@ -110,8 +110,7 @@ struct ProjectDetailView: View {
                         pages: sortedPages,
                         selectedFolderID: $scopeFolderID,
                         renaming: { renamingTarget = $0 },
-                        deleting: { deletingFolder = $0 },
-                        moveTargets: folderMoveTargets
+                        deleting: { deletingFolder = $0 }
                     )
                 }
                 ForEach(rootPages) { page in

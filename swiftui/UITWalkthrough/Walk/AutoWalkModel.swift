@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import SwiftData
 
 // MARK: - 自动走查状态模型（对齐 Electron AutoWalkPanel 的状态与流程编排）
@@ -277,14 +278,14 @@ final class AutoWalkModel {
                 if !specToks.isEmpty {
                     let dto = try await EngineBridge.checkSpec(
                         domRootJSON: payload.domRootJSON,
-                        tokens: specToks,
+                        tokens: EngineJSONBox(values: specToks),
                         viewport: payload.viewport,
                         tolerance: tolerance
                     )
                     if let violations = dto.violations, !violations.isEmpty {
                         let rows = violations.enumerated().map { violationToIssue($0.element, index: $0.offset, pageId: page.id) }
                         replaceRows(
-                            of: walkIssues.filter { $0.source == .spec },
+                            walkIssues.filter { $0.source == .spec },
                             with: rows,
                             context: context
                         )
@@ -306,7 +307,7 @@ final class AutoWalkModel {
                 if let findings = dto.findings, !findings.isEmpty {
                     let rows = findings.enumerated().map { elementFindingToIssue($0.element, index: $0.offset, pageId: page.id) }
                     replaceRows(
-                        of: walkIssues.filter { $0.source == .element },
+                        walkIssues.filter { $0.source == .element },
                         with: rows,
                         context: context
                     )
@@ -326,7 +327,7 @@ final class AutoWalkModel {
                     if let findings = dto.findings, !findings.isEmpty {
                         let rows = findings.enumerated().map { a11yFindingToIssue($0.element, index: $0.offset, pageId: page.id) }
                         replaceRows(
-                            of: walkIssues.filter { $0.source == .a11y },
+                            walkIssues.filter { $0.source == .a11y },
                             with: rows,
                             context: context
                         )
@@ -356,7 +357,7 @@ final class AutoWalkModel {
                 depth: checkOptions.depth,
                 analysisLabels: WalkCatalog.analyses.filter { checkOptions.analysis.contains($0.key) }.map(\.label),
                 style: checkOptions.style,
-                specSummary: specToks.isEmpty ? nil : formatSpecSummary(specToks)
+                specSummary: specToks.isEmpty ? nil : Self.formatSpecSummary(specToks)
             )
             let pageNameForTask = page.pageName
             let res = await AIVisionService.aiAnnotate(

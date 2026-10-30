@@ -165,6 +165,11 @@ enum EngineBridgeError: LocalizedError {
 
 // MARK: - 引擎桥接
 
+/// 非 Sendable JSON 装箱（[[String: Any]] 跨隔离域传参用；内容只在子进程入参序列化时读取，无共享可变状态）
+struct EngineJSONBox: @unchecked Sendable {
+    let values: [[String: Any]]
+}
+
 enum EngineBridge {
     /// CLI 绝对路径解析：① UserDefaults engineBridgePath ② App 包 Resources 内 ③ 开发布局（从 .app 向上逐级找 swiftui/engine-bridge/dist）
     static func cliURL() -> URL? {
@@ -333,7 +338,7 @@ enum EngineBridge {
     /// 设计规范 Token 校验（tokens 元素形如 {kind, name, value}，value 为已解析的 Token 值对象）
     static func checkSpec(
         domRootJSON: Data,
-        tokens: [[String: Any]],
+        tokens: EngineJSONBox,
         viewport: CGSize,
         tolerance: ToleranceConfig
     ) async throws -> EngineSpecDTO {
@@ -341,7 +346,7 @@ enum EngineBridge {
             command: "check-spec",
             payload: [
                 "domRoot": try JSONSerialization.jsonObject(with: domRootJSON),
-                "tokens": tokens,
+                "tokens": tokens.values,
                 "viewport": sizePayload(viewport),
                 "tolerance": tolerancePayload(tolerance)
             ],

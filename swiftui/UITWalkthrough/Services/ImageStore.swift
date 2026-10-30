@@ -5,10 +5,10 @@ import Foundation
 /// 数据库仅存相对路径（`images/<uuid>.<ext>`），物理位置 Application Support/UITWalkthrough/walkthrough-data/images/。
 @MainActor
 enum ImageStore {
-    private static let relativePrefix = "images/"
+    nonisolated private static let relativePrefix = "images/"
 
     /// 生成并确保图片目录存在
-    static func baseDir() -> URL {
+    nonisolated static func baseDir() -> URL {
         let fm = FileManager.default
         let dir = fm
             .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -20,7 +20,7 @@ enum ImageStore {
     }
 
     /// 相对路径 → 绝对 URL（相对路径形如 `images/<fileName>`）
-    static func resolve(_ relativePath: String) -> URL {
+    nonisolated static func resolve(_ relativePath: String) -> URL {
         let name = relativePath.hasPrefix(relativePrefix)
             ? String(relativePath.dropFirst(relativePrefix.count))
             : relativePath
@@ -45,7 +45,7 @@ enum ImageStore {
     }
 
     /// 读取图片数据（对齐 file:readImage，缺失返回 nil 不阻塞）
-    static func data(of relativePath: String) -> Data? {
+    nonisolated static func data(of relativePath: String) -> Data? {
         try? Data(contentsOf: resolve(relativePath))
     }
 

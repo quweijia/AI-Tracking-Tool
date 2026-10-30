@@ -68,7 +68,14 @@ private struct AuthCardLayout<Fields: View>: View {
     let title: String
     let desc: String
     let savedLabel: String
-    let fields: Fields
+    let fields: () -> Fields
+
+    init(title: String, desc: String, savedLabel: String, @ViewBuilder fields: @escaping () -> Fields) {
+        self.title = title
+        self.desc = desc
+        self.savedLabel = savedLabel
+        self.fields = fields
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -84,7 +91,7 @@ private struct AuthCardLayout<Fields: View>: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack(alignment: .top, spacing: 10) {
-                fields
+                fields()
             }
         }
     }

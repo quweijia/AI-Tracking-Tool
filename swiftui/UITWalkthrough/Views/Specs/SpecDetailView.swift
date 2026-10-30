@@ -315,7 +315,7 @@ struct SpecDetailView: View {
         } message: {
             Text("确定删除规范「\(spec?.name ?? "")」？其全部历史版本、Token 与项目绑定将一并删除。")
         }
-        .popover(item: $refPop, arrowEdge: .edge) { tok in refPopover(tok) }
+        .popover(item: $refPop, arrowEdge: .bottom) { tok in refPopover(tok) }
     }
 
     // MARK: 横幅
@@ -664,9 +664,9 @@ struct SpecDetailView: View {
     }
 
     /// 递归分组树（点名称过滤该组含子级，再点取消；子树默认全展开，对齐 Electron 版）
-    @ViewBuilder
-    private func sideTreeNodes(_ nodes: [SideNode], depth: Int) -> some View {
-        ForEach(nodes) { node in
+    /// 递归视图无法用 opaque `some View` 自举，统一以 AnyView 擦除
+    private func sideTreeNodes(_ nodes: [SideNode], depth: Int) -> AnyView {
+        AnyView(ForEach(nodes) { node in
             Button {
                 pathFilter = pathFilter == node.keyPath ? nil : node.keyPath
             } label: {
@@ -685,7 +685,7 @@ struct SpecDetailView: View {
             .buttonStyle(.plain)
             .foregroundStyle(pathFilter == node.keyPath ? Color.accentColor : .primary)
             sideTreeNodes(node.kids, depth: depth + 1)
-        }
+        })
     }
 
     /// Token 表格：名称 + 各模式值列（点击复制 / 引用弹层）
@@ -845,7 +845,7 @@ struct SpecDetailView: View {
 
     private func bindCardRow(_ p: Project) -> some View {
         let mine = bindingsAll.contains { $0.projectId == p.id && $0.specId == specId }
-        let catSpecIds = Set(specsAll.filter { $0.categoryId == spec.flatMap { s in categories.first { $0.id == s.categoryId } }?.categoryId }.map(\.id))
+        let catSpecIds = Set(specsAll.filter { $0.categoryId == spec.flatMap { s in categories.first { $0.id == s.categoryId } }?.id }.map(\.id))
         let other = bindingsAll.first { $0.projectId == p.id && $0.specId != specId && catSpecIds.contains($0.specId) }
         let otherName = other.flatMap { o in specsAll.first { $0.id == o.specId } }?.name ?? "—"
         let pill: (String, SpecPill.Tone) = mine
@@ -1166,7 +1166,7 @@ struct SpecDetailView: View {
         panel.allowedFileTypes = [suffix.components(separatedBy: ".").last ?? "json"]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let text = try await EngineBridge.exportTokens(list, format: format)
+            let text = try await EngineBridge.exportTokens(EngineJSONBox(values: list), format: format)
             try text.write(to: url, atomically: true, encoding: .utf8)
             exportMsg = (true, "已导出：\(url.path)")
         } catch {

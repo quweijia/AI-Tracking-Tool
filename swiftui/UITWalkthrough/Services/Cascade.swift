@@ -39,7 +39,7 @@ enum Cascade {
             .filter { $0.projectId == projectID }.forEach { context.delete($0) }
         fetchAll(SpecTokenMapping.self, context: context)
             .filter { $0.projectId == projectID }.forEach { context.delete($0) }
-        if let project = first(Project.self, id: projectID, context: context) { context.delete(project) }
+        if let project = fetchAll(Project.self, context: context).first(where: { $0.id == projectID }) { context.delete(project) }
         try? context.save()
     }
 
@@ -75,7 +75,7 @@ enum Cascade {
             .filter { $0.specId == specID }.forEach { context.delete($0) }
         fetchAll(SpecTokenMapping.self, context: context)
             .filter { $0.specId == specID }.forEach { context.delete($0) }
-        if let spec = first(DesignSpec.self, id: specID, context: context) { context.delete(spec) }
+        if let spec = fetchAll(DesignSpec.self, context: context).first(where: { $0.id == specID }) { context.delete(spec) }
         try? context.save()
     }
 
@@ -84,7 +84,7 @@ enum Cascade {
         fetchAll(DesignSpec.self, context: context)
             .filter { $0.categoryId == categoryID }
             .forEach { deleteSpec($0.id, context: context) }
-        if let category = first(SpecCategory.self, id: categoryID, context: context) {
+        if let category = fetchAll(SpecCategory.self, context: context).first(where: { $0.id == categoryID }) {
             context.delete(category)
         }
         try? context.save()
@@ -94,12 +94,6 @@ enum Cascade {
 
     private static func fetchAll<T: PersistentModel>(_ type: T.Type, context: ModelContext) -> [T] {
         (try? context.fetch(FetchDescriptor<T>())) ?? []
-    }
-
-    private static func first<T: PersistentModel>(_ type: T.Type, id: String, context: ModelContext) -> T? {
-        var descriptor = FetchDescriptor<T>(predicate: #Predicate { $0.id == id })
-        descriptor.fetchLimit = 1
-        return (try? context.fetch(descriptor))?.first
     }
 
     private static func fetchPages(context: ModelContext) -> [WalkthroughPage] {

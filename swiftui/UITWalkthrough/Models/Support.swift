@@ -67,10 +67,17 @@ extension CGRect {
     }
 }
 
-/// hex 字符串 → Color（支持 #RGB / #RRGGBB / #RRGGBBAA；非法输入返回灰）
+/// hex 字符串 → Color（支持 #RGB / #RRGGBB / #RRGGBBAA；非法输入返回 nil）
 func colorFromHex(_ hex: String) -> Color? {
     var s = hex.trimmingCharacters(in: .whitespacesAndNewlines)
     if s.hasPrefix("#") { s.removeFirst() }
+    // #RGB 短格式：每位重复展开（对齐 Electron hexToRgba）
+    if s.count == 3, let v = UInt64(s, radix: 16) {
+        let r = Double((v >> 8 & 0xF) * 17) / 255
+        let g = Double((v >> 4 & 0xF) * 17) / 255
+        let b = Double((v & 0xF) * 17) / 255
+        return Color(.sRGB, red: r, green: g, blue: b, opacity: 1)
+    }
     guard s.count == 6 || s.count == 8 else { return nil }
     var value: UInt64 = 0
     guard Scanner(string: s).scanHexInt64(&value) else { return nil }

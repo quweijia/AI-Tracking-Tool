@@ -50,7 +50,7 @@ enum DocExportUtil {
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
         NSColor.white.setFill()
         NSRect(x: 0, y: 0, width: nw, height: nh).fill()
-        image.draw(in: NSRect(x: 0, y: 0, width: nw, height: nh), from: .zero, operation: .sourceOver)
+        image.draw(in: NSRect(x: 0, y: 0, width: nw, height: nh), from: .zero, operation: .sourceOver, fraction: 1)
         NSGraphicsContext.restoreGraphicsState()
         guard let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.88]) else { return dataUrl }
         return "data:image/jpeg;base64,\(jpeg.base64EncodedString())"
@@ -344,16 +344,16 @@ enum FeishuService {
             let tableId = nextId()
             var cellIds: [String] = []
             for _ in 0..<(chunk.count * colSize) { cellIds.append(nextId()) }
+            var tableProperty: [String: Any] = [
+                "row_size": chunk.count,
+                "column_size": colSize
+            ]
+            if let columnWidths { tableProperty["column_width"] = columnWidths }
             var descendants: [[String: Any]] = [
                 [
                     "block_id": tableId,
                     "block_type": 31,
-                    "table": [
-                        "property": [
-                            "row_size": chunk.count,
-                            "column_size": colSize
-                        ] + (columnWidths.map { ["column_width": $0] } ?? [:])
-                    ],
+                    "table": ["property": tableProperty],
                     "children": cellIds
                 ]
             ]
@@ -394,7 +394,7 @@ enum FeishuService {
             let app = try await retrying {
                 try await json(token, "\(baseUrl)/bitable/v1/apps", body: ["name": "问题明细 - \(title)"])
             }
-            appToken = app["app"]?["app_token"] as? String ?? ""
+            appToken = (app["app"] as? [String: Any])?["app_token"] as? String ?? ""
 
             // 2. 建表（字段：序号/问题描述/严重度/分类/状态/标注图/前端开发-人员）
             func opt(_ name: String, _ color: Int) -> [String: Any] { ["name": name, "color": color] }
@@ -500,7 +500,7 @@ enum FeishuService {
             let token = try await tenantToken()
             // 1. 创建文档
             let doc = try await json(token, "\(baseUrl)/docx/v1/documents", body: ["title": payload.title])
-            guard let docId = doc["document"]?["document_id"] as? String else {
+            guard let docId = (doc["document"] as? [String: Any])?["document_id"] as? String else {
                 throw DocExportError("创建文档失败：未返回 document_id")
             }
 
@@ -750,7 +750,7 @@ enum TencentDocService {
             }
             guard let cosPutUrl = pre.data["COSPutURL"] as? String,
                   let cosFileKey = pre.data["COSFileKey"] as? String else {
-                let raw = String(data: JSONSerialization.data(withJSONObject: pre.data, options: [.fragmentsAllowed]), encoding: .utf8) ?? ""
+                let raw = String(data: try JSONSerialization.data(withJSONObject: pre.data, options: [.fragmentsAllowed]), encoding: .utf8) ?? ""
                 return (false, nil, "预导入返回异常：\(String(raw.prefix(200)))")
             }
 
@@ -778,7 +778,7 @@ enum TencentDocService {
                 return (false, nil, "导入失败：\(retMessage(imp.ret, imp.msg))")
             }
             guard let progressQueryID = imp.data["progressQueryID"] as? String else {
-                let raw = String(data: JSONSerialization.data(withJSONObject: imp.data, options: [.fragmentsAllowed]), encoding: .utf8) ?? ""
+                let raw = String(data: try JSONSerialization.data(withJSONObject: imp.data, options: [.fragmentsAllowed]), encoding: .utf8) ?? ""
                 return (false, nil, "导入返回异常：\(String(raw.prefix(200)))")
             }
 

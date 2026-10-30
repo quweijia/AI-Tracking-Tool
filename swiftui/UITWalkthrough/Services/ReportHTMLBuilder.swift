@@ -142,16 +142,19 @@ enum ReportHTMLBuilder {
             "<text x=\"60\" y=\"58\" text-anchor=\"middle\" font-size=\"19\" font-weight=\"700\" fill=\"#1f2937\">\(issues.count)</text>" +
             "<text x=\"60\" y=\"74\" text-anchor=\"middle\" font-size=\"9\" fill=\"#667085\">个问题</text></svg>"
         let legend = catEntries.map { cat, n -> String in
-            "<div class=\"legend-row\"><span class=\"legend-dot\" style=\"background:\(IssueCategory(rawValue: cat)?.reportColorHex ?? "#98a2b3")\"></span>" +
-                "<span class=\"legend-name\">\(escapeHtml(IssueCategory(rawValue: cat)?.label ?? cat))</span>" +
-                "<span class=\"legend-val\">\(n) · \((Int((Double(n) / Double(issues.count) * 100).rounded()))%)</span></div>"
+            let color = IssueCategory(rawValue: cat)?.reportColorHex ?? "#98a2b3"
+            let pct = Int((Double(n) / Double(issues.count) * 100).rounded())
+            let label = escapeHtml(IssueCategory(rawValue: cat)?.label ?? cat)
+            return "<div class=\"legend-row\"><span class=\"legend-dot\" style=\"background:\(color)\"></span>" +
+                "<span class=\"legend-name\">\(label)</span>" +
+                "<span class=\"legend-val\">\(n) · \(pct)%</span></div>"
         }.joined()
 
         let sevOrder: [Severity] = [.major, .minor, .suggestion]
         let sevCount = Dictionary(grouping: issues, by: \.severity).mapValues(\.count)
         let maxSev = max(sevCount.values.max() ?? 0, 1)
         let bars = sevOrder.map { s -> String in
-            let n = sevCount[s] ?? 0
+            let n = sevCount[s.rawValue] ?? 0
             let width = max(Double(n) / Double(maxSev) * 100, n > 0 ? 4 : 0)
             return "<div class=\"bar-row\"><span class=\"bar-label\">\(escapeHtml(s.label))</span>" +
                 "<div class=\"bar-track\"><div class=\"bar-fill\" style=\"width:\(String(format: "%.1f", width))%;background:\(s.colorHex)\"></div></div>" +
@@ -275,7 +278,7 @@ enum ReportHTMLBuilder {
                   <svg class="arrow-layer" id="arrows-\(key)"></svg>
                   <div class="markers" id="markers-\(key)"></div>
                 </div>
-              </section>\
+              </section>
             """
         }
 
@@ -952,7 +955,7 @@ enum ReportHTMLBuilder {
         renderAll();
         </script>
         </body>
-        </html>\
+        </html>
         """
     }
 }

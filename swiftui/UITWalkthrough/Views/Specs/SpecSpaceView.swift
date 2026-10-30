@@ -96,36 +96,6 @@ struct TokenSwatch: View {
     }
 }
 
-/// hex 字符串 → Color（#RGB/#RRGGBB/#RRGGBBAA）
-func colorFromHex(_ hex: String) -> Color? {
-    var s = hex.trimmingCharacters(in: .whitespaces)
-    if s.hasPrefix("#") { s.removeFirst() }
-    var v: UInt64 = 0
-    guard Scanner(string: s).scanHexInt64(&v) else { return nil }
-    switch s.count {
-    case 3:
-        let r = CGFloat((v >> 8 & 0xF) * 17) / 255
-        let g = CGFloat((v >> 4 & 0xF) * 17) / 255
-        let b = CGFloat((v & 0xF) * 17) / 255
-        return Color(red: r, green: g, blue: b)
-    case 6:
-        return Color(
-            red: CGFloat((v >> 16) & 0xFF) / 255,
-            green: CGFloat((v >> 8) & 0xFF) / 255,
-            blue: CGFloat(v & 0xFF) / 255
-        )
-    case 8:
-        return Color(
-            red: CGFloat((v >> 24) & 0xFF) / 255,
-            green: CGFloat((v >> 16) & 0xFF) / 255,
-            blue: CGFloat((v >> 8) & 0xFF) / 255,
-            opacity: CGFloat(v & 0xFF) / 255
-        )
-    default:
-        return nil
-    }
-}
-
 // MARK: - 规范空间根视图（.specs 侧边栏入口）
 
 struct SpecSpaceView: View {
@@ -213,7 +183,7 @@ struct SpecsIndexView: View {
         }
         .navigationTitle("设计规范")
         .sheet(item: $creatingIn) { categoryId in
-            SpecEditSheet(categoryId: categoryId, spec: nil)
+            SpecEditSheet(categoryId: categoryId.id, spec: nil)
         }
         .sheet(isPresented: $showGuide) { guideSheet }
         .sheet(item: $checkResult) { state in checkSheet(state) }
@@ -500,13 +470,6 @@ struct SpecsIndexView: View {
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
     }
 
-    private func fmtShortTime(_ ts: Double) -> String {
-        guard ts > 0 else { return "—" }
-        let f = DateFormatter()
-        f.dateFormat = "MM/dd HH:mm"
-        return f.string(from: Date(timeIntervalSince1970: ts / 1000))
-    }
-
     // MARK: 检查更新（逐套规范轻量比对 Figma last_modified）
 
     private func runCheck() async {
@@ -587,16 +550,8 @@ struct SpecsIndexView: View {
                                 Text("Figma 更新").frame(width: 90, alignment: .leading)
                             }
                             .font(.caption2.weight(.medium)).foregroundStyle(.secondary)
-                            ForEach(rows, id: \.spec.id) { row in
-                                HStack {
-                                    Text(row.spec.name).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                                    Text(row.catName).lineLimit(1).frame(width: 110, alignment: .leading)
-                                    SpecPill(text: row.statusText, tone: row.statusTone).frame(width: 70, alignment: .leading)
-                                    Text(row.localTs > 0 ? fmtShortTime(row.localTs) : "—").frame(width: 90, alignment: .leading)
-                                    Text(row.remoteTs > 0 ? fmtShortTime(row.remoteTs) : "—").frame(width: 90, alignment: .leading)
-                                }
-                                .font(.caption)
-                                .padding(.vertical, 4)
+                            ForEach(rows) { row in
+                                SpecCheckRowView(row: row)
                             }
                         }
                     }
@@ -654,6 +609,31 @@ struct SpecCheckRow: Identifiable {
     let localTs: Double
 }
 
+/// 检查结果表格行（独立子视图，规避长 ViewBuilder 表达式的类型检查发散）
+private struct SpecCheckRowView: View {
+    let row: SpecCheckRow
+
+    var body: some View {
+        HStack {
+            Text(row.spec.name).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+            Text(row.catName).lineLimit(1).frame(width: 110, alignment: .leading)
+            SpecPill(text: row.status.statusText, tone: row.status.statusTone).frame(width: 70, alignment: .leading)
+            Text(row.localTs > 0 ? fmtShortTime(row.localTs) : "—").frame(width: 90, alignment: .leading)
+            Text(row.remoteTs > 0 ? fmtShortTime(row.remoteTs) : "—").frame(width: 90, alignment: .leading)
+        }
+        .font(.caption)
+        .padding(.vertical, 4)
+    }
+}
+
+/// 短时间格式（MM/dd HH:mm， ts 为毫秒）
+private func fmtShortTime(_ ts: Double) -> String {
+    guard ts > 0 else { return "—" }
+    let f = DateFormatter()
+    f.dateFormat = "MM/dd HH:mm"
+    return f.string(from: Date(timeIntervalSince1970: ts / 1000))
+}
+
 enum SpecCheckState: Identifiable {
     case noPat
     case failed(String)
@@ -703,7 +683,7 @@ struct SpecCategoryListView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if let category {
-                    header(category)
+                    header
                 }
                 if specs.isEmpty {
                     emptyState
@@ -757,7 +737,7 @@ struct SpecCategoryListView: View {
     }
 
     private var sortedSpecs: [DesignSpec] {
-        specs.sorted { $0.sortOrder < $1.sortOrder }
+        specs.sorted { $0.createdAt < $1.createdAt }
     }
 
     private var grid: some View {

@@ -7,6 +7,11 @@ import WebKit
 // 页面加载完成后点「生成问题标注」采集 DOM 树 + 截图回传走查面板。
 // 采集流程对齐 DevBrowser.runCapture：等加载 → 回顶部 → 整页拉高 webview → 注入采集脚本 → 截图 → 还原高度。
 
+/// NSImage 装箱（非 Sendable 图像跨回调/隔离域回传用；截图结果仅回传给单一调用方，不共享）
+private struct SnapshotBox: @unchecked Sendable {
+    let image: NSImage?
+}
+
 /// 采集结果载荷：DOM 树 JSON（StyleNode 结构）+ 整页 PNG 截图 + 视口与统计
 struct DevCapturePayload {
     var domRootJSON: Data
@@ -46,8 +51,8 @@ private final class FlippedView: NSView {
 
 @MainActor
 final class DevCaptureWindowController: NSObject, NSWindowDelegate, WKNavigationDelegate {
-    /// 活跃采集窗口注册表：跨页面后台走查时强持有，windowWillClose 时移除
-    nonisolated private static var liveControllers: [ObjectIdentifier: DevCaptureWindowController] = [:]
+    /// 活跃采集窗口注册表：跨页面后台走查时强持有，windowWillClose 时移除（随类 MainActor 隔离）
+    private static var liveControllers: [ObjectIdentifier: DevCaptureWindowController] = [:]
     static func retainLive(_ controller: DevCaptureWindowController) {
         liveControllers[ObjectIdentifier(controller)] = controller
     }
@@ -310,16 +315,17 @@ final class DevCaptureWindowController: NSObject, NSWindowDelegate, WKNavigation
         // 5. 截图（webview 高度即文档高度，整张内容都在视口内）
         let config = WKSnapshotConfiguration()
         config.rect = CGRect(origin: .zero, size: web.frame.size)
-        let image: NSImage = try await withCheckedThrowingContinuation { continuation in
+        let box: SnapshotBox = try await withCheckedThrowingContinuation { continuation in
             web.takeSnapshot(with: config) { img, err in
                 if let img {
-                    continuation.resume(returning: img)
+                    continuation.resume(returning: SnapshotBox(image: img))
                 } else {
                     continuation.resume(throwing: DevCaptureError.snapshotFailed(err?.localizedDescription ?? "未知错误"))
                 }
             }
         }
-        guard let tiff = image.tiffRepresentation,
+        guard let image = box.image,
+              let tiff = image.tiffRepresentation,
               let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:]) else {
             throw DevCaptureError.pngEncodeFailed
