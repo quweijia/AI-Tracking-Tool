@@ -8,7 +8,14 @@ struct RootView: View {
     var body: some View {
         @Bindable var appState = appState
         NavigationSplitView {
-            List(selection: $appState.section) {
+            // 侧边栏切换到其他节时清掉报告导出目标，回到报告列表
+            List(selection: Binding(
+                get: { appState.section },
+                set: {
+                    if $0 != appState.section { appState.reportExportPageID = nil }
+                    appState.section = $0
+                }
+            )) {
                 Section {
                     ForEach(AppSection.allCases) { section in
                         Label(section.title, systemImage: section.icon)
@@ -27,7 +34,11 @@ struct RootView: View {
             case .compare:
                 CompareWorkbenchView()
             case .reports:
-                ComingSoonView(title: "分析报告", hint: "对应 Electron 版 ReportsPage")
+                if let pid = appState.reportExportPageID {
+                    ExportReportView(pageId: pid)
+                } else {
+                    ReportsHomeView()
+                }
             case .specs:
                 SpecSpaceView()
             case .settings:

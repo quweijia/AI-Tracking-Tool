@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - 设置页（对齐 Electron pages/Settings.tsx；m7 落地 AI 模型管理 + 通用音效，其余区块后续里程碑补充）
+// MARK: - 设置页（对齐 Electron pages/Settings.tsx；m7 落地 AI 模型管理 + 通用音效，m8 补充应用授权）
 
 struct SettingsView: View {
     var body: some View {
@@ -8,6 +8,7 @@ struct SettingsView: View {
             VStack(spacing: 14) {
                 ModelsSection()
                 GeneralSection()
+                AppAuthSection()
             }
             .padding(20)
         }
@@ -41,6 +42,288 @@ private struct GeneralSection: View {
         .onAppear {
             soundEnabled = AppConfigStore.load().soundEnabled != false
         }
+    }
+}
+
+// MARK: - 应用授权（飞书 / 腾讯文档 / 金山文档，对齐 Settings.tsx 应用授权区块）
+
+private struct AppAuthSection: View {
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 14) {
+                FeishuAuthCard()
+                Divider()
+                TencentAuthCard()
+                Divider()
+                KingsoftAuthCard()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+}
+
+/// 三张授权卡的公共骨架：标题 + 已保存状态 + 说明 + 字段 + 测试连接
+private struct AuthCardLayout<Fields: View>: View {
+    let title: String
+    let desc: String
+    let savedLabel: String
+    let fields: Fields
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Text(savedLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Text(desc)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 10) {
+                fields
+            }
+        }
+    }
+}
+
+private struct FeishuAuthCard: View {
+    @State private var appId = ""
+    @State private var appSecret = ""
+    @State private var loaded = false
+    @State private var testing = false
+    @State private var testMsg: (ok: Bool, text: String)?
+
+    private var trimmedAppId: String { appId.trimmingCharacters(in: .whitespaces) }
+    private var trimmedSecret: String { appSecret.trimmingCharacters(in: .whitespaces) }
+    private var hasSaved: Bool { !trimmedAppId.isEmpty || !trimmedSecret.isEmpty }
+
+    private func persist() {
+        var cfg = AppConfigStore.load()
+        cfg.feishu = FeishuAppConfig(
+            appId: trimmedAppId.isEmpty ? nil : trimmedAppId,
+            appSecret: trimmedSecret.isEmpty ? nil : trimmedSecret
+        )
+        AppConfigStore.save(cfg)
+    }
+
+    private func test() {
+        testing = true
+        testMsg = nil
+        Task {
+            let res = await FeishuService.test()
+            testMsg = (res.ok, res.ok ? "测试通过" : "测试失败：\(res.message)")
+            testing = false
+        }
+    }
+
+    var body: some View {
+        AuthCardLayout(
+            title: "飞书集成",
+            desc: "使用飞书自建应用凭据（需开通云文档权限），用于一键将走查报告创建为飞书文档。",
+            savedLabel: hasSaved ? "已保存" : "未配置",
+            fields: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("App ID").font(.caption).foregroundStyle(.secondary)
+                    TextField("App ID（cli_xxx）", text: $appId)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 240)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("App Secret").font(.caption).foregroundStyle(.secondary)
+                    SecureField("App Secret", text: $appSecret)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 240)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(" ").font(.caption)
+                    HStack(spacing: 8) {
+                        Button(testing ? "测试中..." : "测试连接") { test() }
+                            .disabled(testing || !hasSaved)
+                        if let msg = testMsg {
+                            Text(msg.text)
+                                .font(.caption)
+                                .foregroundStyle(msg.ok ? Color.green : Color.red)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
+        )
+        .onAppear {
+            let cfg = AppConfigStore.load().feishu
+            appId = cfg?.appId ?? ""
+            appSecret = cfg?.appSecret ?? ""
+            loaded = true
+        }
+        .onChange(of: appId) { _, _ in
+            if loaded { persist() }
+        }
+        .onChange(of: appSecret) { _, _ in
+            if loaded { persist() }
+        }
+    }
+}
+
+private struct TencentAuthCard: View {
+    @State private var clientId = ""
+    @State private var accessToken = ""
+    @State private var openId = ""
+    @State private var loaded = false
+    @State private var testing = false
+    @State private var testMsg: (ok: Bool, text: String)?
+
+    private func trimmed(_ s: String) -> String { s.trimmingCharacters(in: .whitespaces) }
+    private var hasSaved: Bool {
+        !trimmed(clientId).isEmpty || !trimmed(accessToken).isEmpty || !trimmed(openId).isEmpty
+    }
+
+    private func persist() {
+        var cfg = AppConfigStore.load()
+        cfg.tencentDocs = TencentDocsConfig(
+            clientId: trimmed(clientId).isEmpty ? nil : trimmed(clientId),
+            accessToken: trimmed(accessToken).isEmpty ? nil : trimmed(accessToken),
+            openId: trimmed(openId).isEmpty ? nil : trimmed(openId)
+        )
+        AppConfigStore.save(cfg)
+    }
+
+    private func test() {
+        testing = true
+        testMsg = nil
+        Task {
+            let res = await TencentDocService.test()
+            testMsg = (res.ok, res.ok ? "测试通过" : "测试失败：\(res.message)")
+            testing = false
+        }
+    }
+
+    var body: some View {
+        AuthCardLayout(
+            title: "腾讯文档",
+            desc: "填写腾讯文档开放平台「开发者信息」（应用 ID client_id / access_token / open_id），用于一键将走查报告创建为腾讯文档。",
+            savedLabel: hasSaved ? "已保存" : "未配置",
+            fields: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("应用 ID（client_id）").font(.caption).foregroundStyle(.secondary)
+                    TextField("应用 ID（client_id）", text: $clientId)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("access_token").font(.caption).foregroundStyle(.secondary)
+                    SecureField("access_token", text: $accessToken)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("open_id").font(.caption).foregroundStyle(.secondary)
+                    TextField("open_id", text: $openId)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(" ").font(.caption)
+                    HStack(spacing: 8) {
+                        Button(testing ? "测试中..." : "测试连接") { test() }
+                            .disabled(testing || !hasSaved)
+                        if let msg = testMsg {
+                            Text(msg.text)
+                                .font(.caption)
+                                .foregroundStyle(msg.ok ? Color.green : Color.red)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
+        )
+        .onAppear {
+            let cfg = AppConfigStore.load().tencentDocs
+            clientId = cfg?.clientId ?? ""
+            accessToken = cfg?.accessToken ?? ""
+            openId = cfg?.openId ?? ""
+            loaded = true
+        }
+        .onChange(of: clientId) { _, _ in if loaded { persist() } }
+        .onChange(of: accessToken) { _, _ in if loaded { persist() } }
+        .onChange(of: openId) { _, _ in if loaded { persist() } }
+    }
+}
+
+private struct KingsoftAuthCard: View {
+    @State private var appId = ""
+    @State private var appSecret = ""
+    @State private var loaded = false
+    @State private var testing = false
+    @State private var testMsg: (ok: Bool, text: String)?
+
+    private var trimmedAppId: String { appId.trimmingCharacters(in: .whitespaces) }
+    private var trimmedSecret: String { appSecret.trimmingCharacters(in: .whitespaces) }
+    private var hasSaved: Bool { !trimmedAppId.isEmpty || !trimmedSecret.isEmpty }
+
+    private func persist() {
+        var cfg = AppConfigStore.load()
+        cfg.kingsoftDocs = KingsoftDocsConfig(
+            appId: trimmedAppId.isEmpty ? nil : trimmedAppId,
+            appSecret: trimmedSecret.isEmpty ? nil : trimmedSecret
+        )
+        AppConfigStore.save(cfg)
+    }
+
+    private func test() {
+        testing = true
+        testMsg = nil
+        Task {
+            let res = await KingsoftDocService.test()
+            testMsg = (res.ok, res.ok ? "测试通过" : "测试失败：\(res.message)")
+            testing = false
+        }
+    }
+
+    var body: some View {
+        AuthCardLayout(
+            title: "金山文档",
+            desc: "填写金山文档开放平台 App ID / App Secret，用于一键将走查报告创建为金山文档。",
+            savedLabel: hasSaved ? "已保存" : "未配置",
+            fields: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("App ID").font(.caption).foregroundStyle(.secondary)
+                    TextField("App ID", text: $appId)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 240)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("App Secret").font(.caption).foregroundStyle(.secondary)
+                    SecureField("App Secret", text: $appSecret)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 240)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(" ").font(.caption)
+                    HStack(spacing: 8) {
+                        Button(testing ? "测试中..." : "测试连接") { test() }
+                            .disabled(testing || !hasSaved)
+                        if let msg = testMsg {
+                            Text(msg.text)
+                                .font(.caption)
+                                .foregroundStyle(msg.ok ? Color.green : Color.red)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
+        )
+        .onAppear {
+            let cfg = AppConfigStore.load().kingsoftDocs
+            appId = cfg?.appId ?? ""
+            appSecret = cfg?.appSecret ?? ""
+            loaded = true
+        }
+        .onChange(of: appId) { _, _ in if loaded { persist() } }
+        .onChange(of: appSecret) { _, _ in if loaded { persist() } }
     }
 }
 

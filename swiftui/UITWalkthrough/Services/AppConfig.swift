@@ -31,6 +31,12 @@ struct AppConfig: Codable, Equatable, Sendable {
     var aiDefaultModelId: String?
     /// AI 任务完成提示音开关（soundEnabled，缺省开启）
     var soundEnabled: Bool?
+    /// 飞书自建应用凭据（feishu，报告一键创建为飞书文档）
+    var feishu: FeishuAppConfig?
+    /// 腾讯文档开放平台凭据（tencentDocs）
+    var tencentDocs: TencentDocsConfig?
+    /// 金山文档开放平台凭据（kingsoftDocs）
+    var kingsoftDocs: KingsoftDocsConfig?
 
     static let defaultValue = AppConfig()
 

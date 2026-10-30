@@ -241,6 +241,12 @@ struct CompareWorkbenchView: View {
                 .controlSize(.small)
                 Button("编辑页面信息") { editPageOpen = true }
                     .controlSize(.small)
+                Button {
+                    if let page { appState.openReportExport(page: page) }
+                } label: {
+                    Label("导出报告", systemImage: "square.and.arrow.up")
+                }
+                .controlSize(.small)
             }
         }
         .padding(.horizontal, 12)

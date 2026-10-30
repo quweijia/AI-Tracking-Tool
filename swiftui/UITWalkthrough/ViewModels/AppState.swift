@@ -12,6 +12,8 @@ final class AppState {
     var activeProjectID: String?
     /// 当前打开的页面（对比工作台目标）
     var activePageID: String?
+    /// 报告导出页目标页面（非空时分析报告节显示导出视图，否则显示报告列表）
+    var reportExportPageID: String?
 
     /// 打开页面：记录访问（visits 表）+ 切到对比工作台
     func open(page: WalkthroughPage, context: ModelContext) {
@@ -26,5 +28,13 @@ final class AppState {
     func closePage() {
         activePageID = nil
         section = .projects
+    }
+
+    /// 打开某页面的报告导出视图（对齐 Electron 路由 /export?pageId=）
+    func openReportExport(page: WalkthroughPage) {
+        activeProjectID = page.projectId
+        activePageID = page.id
+        reportExportPageID = page.id
+        section = .reports
     }
 }
