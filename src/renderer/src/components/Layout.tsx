@@ -497,6 +497,8 @@ function SidebarTree() {
   const [projectsOpen, setProjectsOpen] = useState(false)
   /** 设计规范分组展开状态（持久化，默认展开） */
   const [specsOpen, setSpecsOpen] = useState(() => localStorage.getItem('app-specs-nav-open') !== '0')
+  /** 设计规范菜单启用开关（设置页「通用」管理，关闭后隐藏整个分组；默认开启） */
+  const [specMenuOn, setSpecMenuOn] = useState(true)
   /** 各项目节点的展开状态 */
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   /** 各文件夹节点的展开状态 */
@@ -530,6 +532,16 @@ function SidebarTree() {
       setProjectsOpen(false)
     }
   }, [specsActive])
+
+  // 读取设计规范菜单开关（设置页「通用」切换后通过 spec-menu-change 事件即时联动）
+  useEffect(() => {
+    const load = () => {
+      void window.electronAPI.getConfig().then((cfg) => setSpecMenuOn(cfg.specMenuEnabled !== false))
+    }
+    load()
+    window.addEventListener('spec-menu-change', load)
+    return () => window.removeEventListener('spec-menu-change', load)
+  }, [])
 
   /** 文件夹 → 其下页面 */
   const pagesByFolder = useMemo(() => {
@@ -722,51 +734,53 @@ function SidebarTree() {
 
   return (
     <>
-      {/* 设计规范：整行跳转总览页，同时展开/收起端分类子项（与项目列表行一致） */}
+      {/* 设计规范：整行跳转总览页，同时展开/收起端分类子项（与项目列表行一致）；设置页可关闭整个功能入口 */}
       {/* nav-group-tree 仅在树展开时挂载：组可收缩（min-height:0）供树内滚动；收起后组不可压缩，防止行被 flex 压缩导致与相邻菜单重叠 */}
-      <div className={`nav-group ${specsOpen ? 'nav-group-tree' : ''}`}>
-        <Link
-          to="/specs"
-          className={`nav-root-row specx-group ${specsRootActive ? 'active' : ''}`}
-          draggable="false"
-          onClick={() => {
-            const next = !specsOpen
-            setSpecsOpen(next)
-            localStorage.setItem('app-specs-nav-open', next ? '1' : '0')
-            // 手风琴：展开设计规范时自动收起项目列表，避免两棵树同时超高被压缩
-            if (next) setProjectsOpen(false)
-          }}
-        >
-          <span className="root-icon">
-            <PaletteIcon />
-          </span>
-          <span className="tree-root-label">{t('navSpecs')}</span>
-          <span className={`specx-caret ${specsOpen ? 'open' : ''}`}>
-            <CaretIcon />
-          </span>
-        </Link>
-        {specsOpen && (
-          <div className="nav-tree specx-navtree">
-            {sortedSpecCats.map((c) => (
-              <Link
-                key={c.id}
-                to={`/specs/${c.id}`}
-                className={`tree-row specx-sub ${
-                  location.pathname === `/specs/${c.id}` || location.pathname.startsWith(`/specs/${c.id}/`)
-                    ? 'active'
-                    : ''
-                }`}
-                draggable="false"
-              >
-                <span className="specx-sub-ico">
-                  <SpecPlatIcon platformKey={c.platformKey} />
-                </span>
-                <span className="tree-label">{c.builtin ? t2(`platform_${c.platformKey}`) : c.name}</span>
-              </Link>
-            ))}
-          </div>
-        )}
-      </div>
+      {specMenuOn && (
+        <div className={`nav-group ${specsOpen ? 'nav-group-tree' : ''}`}>
+          <Link
+            to="/specs"
+            className={`nav-root-row specx-group ${specsRootActive ? 'active' : ''}`}
+            draggable="false"
+            onClick={() => {
+              const next = !specsOpen
+              setSpecsOpen(next)
+              localStorage.setItem('app-specs-nav-open', next ? '1' : '0')
+              // 手风琴：展开设计规范时自动收起项目列表，避免两棵树同时超高被压缩
+              if (next) setProjectsOpen(false)
+            }}
+          >
+            <span className="root-icon">
+              <PaletteIcon />
+            </span>
+            <span className="tree-root-label">{t('navSpecs')}</span>
+            <span className={`specx-caret ${specsOpen ? 'open' : ''}`}>
+              <CaretIcon />
+            </span>
+          </Link>
+          {specsOpen && (
+            <div className="nav-tree specx-navtree">
+              {sortedSpecCats.map((c) => (
+                <Link
+                  key={c.id}
+                  to={`/specs/${c.id}`}
+                  className={`tree-row specx-sub ${
+                    location.pathname === `/specs/${c.id}` || location.pathname.startsWith(`/specs/${c.id}/`)
+                      ? 'active'
+                      : ''
+                  }`}
+                  draggable="false"
+                >
+                  <span className="specx-sub-ico">
+                    <SpecPlatIcon platformKey={c.platformKey} />
+                  </span>
+                  <span className="tree-label">{c.builtin ? t2(`platform_${c.platformKey}`) : c.name}</span>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 最近访问：跳转独立页面（整行可点，含左侧 icon） */}
       <div className="nav-group">

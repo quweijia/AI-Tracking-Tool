@@ -782,7 +782,7 @@ struct SpecDetailView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(Color.primary)
                     .help("\(v.displayText) · 复制")
                 } else {
                     Text("—").font(.caption).foregroundStyle(.tertiary)

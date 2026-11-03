@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { StyleDiff, StyleNode, ToleranceConfig, WalkCheckOptions } from '../../../shared/types'
+import type { LayeredRunSummary, LayeredToleranceConfig, StyleDiff, StyleNode, ToleranceConfig, WalkCheckOptions } from '../../../shared/types'
 import {
   DEFAULT_TOLERANCE,
   DEFAULT_WALK_CHECK_OPTIONS,
+  LAYERED_TOLERANCE_KEY,
   WALK_ANALYSES,
   WALK_DIMENSIONS,
+  normalizeLayeredTolerance,
   normalizeWalkCheckOptions
 } from '../../../shared/types'
 import {
@@ -20,10 +22,15 @@ import {
   type WalkthroughPage
 } from '../db'
 import AnnotationCanvas from './AnnotationCanvas'
-import DevBrowser from './DevBrowser'
+import DevBrowser, { type DevBrowserHandle } from './DevBrowser'
 import IssueEditorModal from './IssueEditorModal'
 import MatchConfirmDrawer, { type PendingPair } from './MatchConfirmDrawer'
+import LayeredResultDrawer from './LayeredResultDrawer'
 import { WalkCheckOptionsModal, WalkAdvancedModal } from './WalkOptionsModal'
+import { buildSkillGuides, type SkillItemLite } from '../utils/skillGuide'
+import SkillStatsPanel from './SkillStatsPanel'
+import { extractSkillTags, stripSkillTags } from '../utils/skillTags'
+import { appendWalkRun, readWalkRuns, type WalkRunRecord } from '../utils/skillStats'
 import {
   checkSpec,
   formatSpecSummary,
@@ -35,6 +42,21 @@ import { checkElements, type ElementFinding } from '../spec/elementCheck'
 import { refineAiRects } from '../spec/aiRectRefine'
 import { checkA11y, type A11yFinding } from '../spec/a11yCheck'
 import { useAiTasksStore } from '../stores/aiTasks'
+
+/** 自动走查技能选择持久化：last=上次选用的技能集（优先），default=全局默认绑定技能集（兜底） */
+const SKILL_LAST_KEY = 'walkLastSkillIds'
+const SKILL_DEFAULT_KEY = 'walkDefaultSkillIds'
+
+/** 读取本地存储的技能 id 列表（JSON 字符串数组，异常时返回空） */
+function readStoredSkillIds(key: string): string[] {
+  try {
+    const raw = localStorage.getItem(key)
+    const arr = raw ? (JSON.parse(raw) as unknown) : null
+    return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
 
 /** 低置信度阈值：低于该值的匹配对进入人工确认 */
 const CONFIRM_THRESHOLD = 0.6
@@ -143,36 +165,6 @@ const A11Y_DESC_KEY: Record<A11yFinding['kind'], string> = {
   'input-no-label': 'a11yInputLabel'
 }
 
-/** 空态插画：浏览器窗口 + 虚线选框 + 光标 + AI 角标（与设计稿一致的浅蓝渐变风） */
-function EmptyIllustration() {
-  return (
-    <svg className="aw-illo" width="200" height="150" viewBox="0 0 200 150" fill="none" aria-hidden>
-      <ellipse cx="100" cy="126" rx="82" ry="12" fill="#dbe6fb" opacity="0.55" />
-      <g transform="rotate(-4 100 75)">
-        <rect x="34" y="22" width="132" height="92" rx="10" fill="#ffffff" stroke="#c9d9f7" strokeWidth="2" />
-        <path d="M34 32c0-5.5 4.5-10 10-10h112c5.5 0 10 4.5 10 10v10H34V32z" fill="#3b82f6" />
-        <circle cx="46" cy="37" r="2.6" fill="#ffffff" opacity="0.9" />
-        <circle cx="55" cy="37" r="2.6" fill="#ffffff" opacity="0.75" />
-        <circle cx="64" cy="37" r="2.6" fill="#ffffff" opacity="0.6" />
-        <rect x="46" y="54" width="52" height="7" rx="3.5" fill="#dbe6fb" />
-        <rect x="46" y="68" width="36" height="7" rx="3.5" fill="#eef3fd" />
-        <rect x="46" y="88" width="44" height="7" rx="3.5" fill="#eef3fd" />
-        <rect x="108" y="54" width="46" height="44" rx="6" fill="#f2f6fe" stroke="#bfd3f9" strokeWidth="1.6" />
-      </g>
-      <rect x="78" y="62" width="46" height="40" rx="4" fill="#e8f0fe" stroke="#3b82f6" strokeWidth="2" strokeDasharray="6 4" />
-      <path d="M96 76l14 6-6 2.4-2.6 6z" fill="#2563eb" stroke="#ffffff" strokeWidth="1.6" />
-      <g transform="rotate(6 148 100)">
-        <rect x="128" y="86" width="40" height="30" rx="8" fill="#2563eb" />
-        <text x="148" y="106" textAnchor="middle" fontSize="14" fontWeight="700" fill="#ffffff" fontFamily="-apple-system, sans-serif">
-          AI
-        </text>
-      </g>
-      <path d="M40 96c-10 8-14 16-10 22" stroke="#9dbdf5" strokeWidth="2" strokeLinecap="round" strokeDasharray="3 5" fill="none" />
-      <circle cx="28" cy="120" r="3" fill="#9dbdf5" />
-    </svg>
-  )
-}
-
 /** 结果面板迷你工具 icon（线性风格，随文字颜色继承） */
 function WalkToolIcon({ name }: { name: WalkTool }) {
   const common = {
@@ -220,6 +212,34 @@ function WalkToolIcon({ name }: { name: WalkTool }) {
   }
 }
 
+/** 空态插画：浏览器窗口 + 虚线选框 + 光标 + AI 角标（浅蓝渐变风） */
+function EmptyIllustration() {
+  return (
+    <svg className="aw-illo" width="200" height="150" viewBox="0 0 200 150" fill="none" aria-hidden>
+      <ellipse cx="100" cy="126" rx="82" ry="12" fill="#dbe6fb" opacity="0.55" />
+      <g transform="rotate(-4 100 75)">
+        <rect x="34" y="22" width="132" height="92" rx="10" fill="#ffffff" stroke="#c9d9f7" strokeWidth="2" />
+        <path d="M34 32c0-5.5 4.5-10 10-10h112c5.5 0 10 4.5 10 10v10H34V32z" fill="#3b82f6" />
+        <circle cx="46" cy="37" r="2.6" fill="#ffffff" opacity="0.9" />
+        <circle cx="55" cy="37" r="2.6" fill="#ffffff" opacity="0.75" />
+        <circle cx="64" cy="37" r="2.6" fill="#ffffff" opacity="0.6" />
+        <rect x="46" y="54" width="52" height="7" rx="3.5" fill="#dbe6fb" />
+        <rect x="46" y="68" width="36" height="7" rx="3.5" fill="#eef3fd" />
+        <rect x="46" y="88" width="44" height="7" rx="3.5" fill="#eef3fd" />
+        <rect x="108" y="54" width="46" height="44" rx="6" fill="#f2f6fe" stroke="#bfd3f9" strokeWidth="1.6" />
+      </g>
+      <rect x="78" y="62" width="46" height="40" rx="4" fill="#e8f0fe" stroke="#3b82f6" strokeWidth="2" strokeDasharray="6 4" />
+      <path d="M96 76l14 6-6 2.4-2.6 6z" fill="#2563eb" stroke="#ffffff" strokeWidth="1.6" />
+      <g transform="rotate(6 148 100)">
+        <rect x="128" y="86" width="40" height="30" rx="8" fill="#2563eb" />
+        <text x="148" y="106" textAnchor="middle" fontSize="14" fontWeight="700" fill="#ffffff" fontFamily="-apple-system, sans-serif">AI</text>
+      </g>
+      <path d="M40 96c-10 8-14 16-10 22" stroke="#9dbdf5" strokeWidth="2" strokeLinecap="round" strokeDasharray="3 5" fill="none" />
+      <circle cx="28" cy="120" r="3" fill="#9dbdf5" />
+    </svg>
+  )
+}
+
 interface AutoWalkPanelProps {
   page: WalkthroughPage
   /** 现有问题（自动走查仅展示 imgSet='walk' 的结果，与手动标注隔离） */
@@ -230,49 +250,56 @@ interface AutoWalkPanelProps {
   focusIssue?: Issue | null
   /** 退出聚焦 */
   onExitFocus?: () => void
-  /** 自动走查设置（Figma 连接 / 开发 URL 输入区）是否展开，由工作台顶部折叠按钮控制 */
+  /** 自动走查设置区（技能 / 自定义检查 / 统计 / 高级调试行）是否展开，由工作台顶部折叠按钮控制 */
   controlsOpen?: boolean
 }
 
 /**
  * 自动走查面板：
- * Figma 连接 + 开发 URL 填写 →「开始走查」自动打开独立开发浏览器窗口（视口宽度自动匹配 Figma 画板），
- * 页面加载完成后在弹窗底部点击「生成问题标注」回传采集结果 →
- * Figma 拉设计稿 → AI 视觉走查 + Token 规范校验 + 元素清单校验（可选 a11y）落库；
+ * 进入面板自动加载开发页面（URL 由页面设置配置）并读取 Figma 画板尺寸（视口宽度自动匹配），
+ * 页面加载完成后自动采集 → Figma 拉设计稿 → AI 视觉走查 + Token 规范校验 + 元素清单校验（可选 a11y）落库，直接出结果；
  * 结构化尺寸 diff 拆为「高级调试」子功能（默认关闭，弹窗手动运行），结果在自动走查 tab 内独立展示（不替换手动上传的双图）。
  */
 export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, onExitFocus, controlsOpen = true }: AutoWalkPanelProps) {
   const { t } = useTranslation('autoWalkPanel')
-  const stageRef = useRef<HTMLDivElement>(null)
   // 弹窗回传监听只注册一次（模块级），页面切换后回传仍可达
   ensureWalkListener()
 
-  const [figUrlInput, setFigUrlInput] = useState(page.figmaUrl ?? '')
-  const [devUrlInput, setDevUrlInput] = useState(page.devUrl ?? '')
-  // 初始即取页面已保存的 devUrl：进入面板自动加载（内嵌模式），无需手动点击
+  // 初始即取页面已保存的 devUrl：进入面板自动加载（内嵌模式）
   const [loadedUrl, setLoadedUrl] = useState(page.devUrl ?? '')
   const [running, setRunning] = useState(false)
-  /** 已发起走查，等待弹窗「生成问题标注」回传 */
-  const [waiting, setWaiting] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [pendingPairs, setPendingPairs] = useState<PendingPair[] | null>(null)
-  /** 弹窗模式（走查统一使用独立内置浏览器弹窗；「显示方式」设置已移除，初始即 true 避免首帧挂载内嵌浏览器） */
-  const [popupMode, setPopupMode] = useState(true)
+  /** 内嵌 webview 页面加载完成（自动触发送走查的前提） */
+  const [pageLoaded, setPageLoaded] = useState(false)
+  /** 内嵌采集中（防重复点击） */
+  const [embedSending, setEmbedSending] = useState(false)
+  /** 内嵌画板中 DevBrowser 句柄（reload / runCapture） */
+  const devBrowserRef = useRef<DevBrowserHandle | null>(null)
+  /** 待采集守卫：点击「开始走查」后置位，页面就绪即发起采集（空态不自动预览/走查） */
+  const pendingCaptureRef = useRef(false)
   /** 自定义检查项与容差（config 持久化） */
   const [checkOptions, setCheckOptions] = useState<WalkCheckOptions>(DEFAULT_WALK_CHECK_OPTIONS)
   const [tolerance, setTolerance] = useState<ToleranceConfig>(DEFAULT_TOLERANCE)
   const [checkOpen, setCheckOpen] = useState(false)
   const [tolOpen, setTolOpen] = useState(false)
+  /** 自动走查技能集（模块1）：可选技能 + 本次选中（入口在自定义检查项弹窗内）；选中技能以指引文本注入 AI 识别 */
+  const [skills, setSkills] = useState<SkillItemLite[]>([])
+  const [skillIds, setSkillIds] = useState<string[]>([])
   /** 高级调试子开关（结构化尺寸 diff，默认关闭，config 持久化） */
   const [advancedDebug, setAdvancedDebug] = useState(false)
+  /** 分层还原度判定开关（增量旁路，默认关闭，config 持久化） */
+  const [layeredEnabled, setLayeredEnabled] = useState(false)
+  /** 最近一次走查的分层旁路摘要（随消息条存活，不落库）；layeredOpen 控制明细抽屉显隐（关闭后可从消息条再次打开） */
+  const [layeredResult, setLayeredResult] = useState<LayeredRunSummary | null>(null)
+  const [layeredOpen, setLayeredOpen] = useState(false)
   /** 自动走查独立双图（tab 内展示，与手动上传隔离） */
   const [walkDesignUrl, setWalkDesignUrl] = useState('')
   const [walkShotUrl, setWalkShotUrl] = useState('')
-  /** 开始走查时匹配到的 Figma 画板宽度（内嵌浏览器预览视口也跟随） */
+  /** 匹配到的 Figma 画板宽度（进入面板自动读取，内嵌画板视口跟随；未读到前为 null 兜底 1440） */
   const [figmaWidth, setFigmaWidth] = useState<number | null>(null)
-  /** 开始走查时匹配到的 Figma 画板高度（弹窗视口与预览高度默认取画板原始尺寸） */
+  /** 匹配到的 Figma 画板高度（进入面板自动读取，内嵌画板视口高度默认取画板原始尺寸） */
   const [figmaHeight, setFigmaHeight] = useState<number | null>(null)
-  const [stageWidth, setStageWidth] = useState(900)
   /** 最近一次自动走查的采集缓存（程序轨校验复用），design 在前 */
   const lastRunRef = useRef<{
     designDataUrl: string
@@ -287,6 +314,12 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
   /** 结果筛选：层（全部/结构化/视觉/手动）与分类 */
   const [layerFilter, setLayerFilter] = useState<LayerFilter>('all')
   const [catFilter, setCatFilter] = useState<Category | 'all'>('all')
+  /** 技能筛选：仅看命中该技能的问题（null=全部，模块3） */
+  const [skillFilter, setSkillFilter] = useState<string | null>(null)
+  /** 技能效果统计面板展开开关 */
+  const [statsOpen, setStatsOpen] = useState(false)
+  /** 自动走查运行记录（localStorage 元信息，统计面板联查当前问题库） */
+  const [walkRuns, setWalkRuns] = useState<WalkRunRecord[]>(() => readWalkRuns())
   /** 结果面板手动标注工具（两画布共用）与共享缩放（设计稿/开发截图同步缩放） */
   const [walkTool, setWalkTool] = useState<WalkTool>('browse')
   const [walkZoom, setWalkZoom] = useState(1)
@@ -350,12 +383,50 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
     window.addEventListener('mouseup', up)
   }
 
-  // 当页面编辑弹窗保存后，page.figmaUrl / page.devUrl 会变化，同步更新本地状态
+  // 当页面编辑弹窗保存后，page.devUrl 会变化：同步加载 URL 并清除待采集守卫
   useEffect(() => {
-    setFigUrlInput(page.figmaUrl ?? '')
-    setDevUrlInput(page.devUrl ?? '')
     setLoadedUrl(page.devUrl ?? '')
-  }, [page.figmaUrl, page.devUrl])
+    pendingCaptureRef.current = false
+    setPageLoaded(false)
+  }, [page.devUrl, page.id])
+
+  // 进入面板 / 切换页面：自动读取 Figma 画板尺寸（视口宽度匹配用）；无连接报错，无 PAT 兜底 1440 放行
+  useEffect(() => {
+    let cancelled = false
+    setFigmaWidth(null)
+    setFigmaHeight(null)
+    const figUrl = (page.figmaUrl ?? '').trim()
+    if (!figUrl) {
+      setMsg({ ok: false, text: t('errNoFigmaUrl') })
+      return
+    }
+    void (async () => {
+      try {
+        const cfg = await window.electronAPI.getConfig()
+        if (cancelled) return
+        const pat = patFromConfig(cfg)
+        if (!pat) {
+          setMsg({ ok: false, text: t('errNoPat') })
+          setFigmaWidth(1440)
+          return
+        }
+        const size = await window.electronAPI.figmaNodeSize({ pat, figmaUrl: figUrl })
+        if (cancelled) return
+        if (size.ok && size.width) {
+          setFigmaWidth(size.width)
+          if (size.height) setFigmaHeight(size.height)
+        } else {
+          setMsg({ ok: false, text: size.message })
+          setFigmaWidth(1440)
+        }
+      } catch {
+        if (!cancelled) setFigmaWidth(1440)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [page.figmaUrl, page.id, t])
 
   // ===== 聚焦查看：放大到 2x，双图画布滚动居中到问题点位 =====
   useEffect(() => {
@@ -378,11 +449,19 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
   // ===== 初始化：读取配置 + 加载走查双图 =====
   useEffect(() => {
     void window.electronAPI.getConfig().then((c) => {
-      // 「显示方式」已由「AI 任务默认浏览器」取代：走查统一使用独立内置浏览器弹窗
-      setPopupMode(true)
       setCheckOptions(checkOptionsFromConfig(c))
       setTolerance(toleranceFromConfig(c))
       setAdvancedDebug(c.walkAdvancedDebug === true)
+      setLayeredEnabled(
+        normalizeLayeredTolerance(c.walkLayeredTolerance as Partial<LayeredToleranceConfig> | undefined).enabled
+      )
+      // 加载技能列表 + 恢复上次选用的技能集（无记录回退全局默认绑定），过滤已删除的技能
+      const skillList = (c.skills as SkillItemLite[] | undefined) ?? []
+      setSkills(skillList)
+      const lastIds = readStoredSkillIds(SKILL_LAST_KEY).filter((id) => skillList.some((s) => s.id === id))
+      setSkillIds(
+        lastIds.length ? lastIds : readStoredSkillIds(SKILL_DEFAULT_KEY).filter((id) => skillList.some((s) => s.id === id))
+      )
     })
   }, [])
 
@@ -400,29 +479,27 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
     }
   }, [page.walkDesignPath, page.walkShotPath])
 
-  useEffect(() => {
-    const el = stageRef.current
-    if (!el) return
-    const ro = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect.width
-      if (w) setStageWidth(w)
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
+
 
   /** 自动走查 imgSet='walk' 的问题（与手动标注隔离） */
   const walkIssues = useMemo(() => issues.filter((i) => i.imgSet === 'walk'), [issues])
-  /** 按层与分类筛选后的结果（画布标注与计数联动） */
+  /** 按层与分类筛选后的结果（画布标注与计数联动）；技能筛选仅看命中该技能的问题（模块3） */
   const filteredWalkIssues = useMemo(
     () =>
       walkIssues.filter(
         (i) =>
           (layerFilter === 'all' || i.source === layerFilter) &&
-          (catFilter === 'all' || i.category === catFilter)
+          (catFilter === 'all' || i.category === catFilter) &&
+          (!skillFilter || extractSkillTags(i.description).includes(skillFilter))
       ),
-    [walkIssues, layerFilter, catFilter]
+    [walkIssues, layerFilter, catFilter, skillFilter]
   )
+  /** 结果中出现过的命中技能（按首次出现序，技能筛选 chip 组） */
+  const walkSkillNames = useMemo(() => {
+    const set = new Set<string>()
+    for (const i of walkIssues) extractSkillTags(i.description).forEach((n) => set.add(n))
+    return [...set]
+  }, [walkIssues])
   const walkDesignIssues = useMemo(
     () => filteredWalkIssues.filter((i) => i.targetImage === 'design' && renderOnCanvas(i)),
     [filteredWalkIssues]
@@ -443,12 +520,9 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
     return (Object.keys(CATEGORY_LABELS) as Category[]).filter((c) => present.has(c))
   }, [walkIssues])
 
-  /** 内嵌浏览器预览视口：宽高默认匹配 Figma 画板（未匹配前 1440 × 900 兜底） */
-  const previewVp = useMemo(
-    () => ({ width: figmaWidth ?? 1440, height: figmaHeight ?? WALK_VP_HEIGHT }),
-    [figmaWidth, figmaHeight]
-  )
-  const displayScale = Math.min(1, (stageWidth - 2) / previewVp.width)
+
+  /** 内嵌画板视口：宽度取 Figma 画板尺寸（未匹配前 1440 兜底），高度取画板原始高度（未匹配前固定基准） */
+  const previewVp = useMemo(() => ({ width: figmaWidth ?? 1440, height: figmaHeight ?? WALK_VP_HEIGHT }), [figmaWidth, figmaHeight])
 
   /** 走查序号：仅对自动走查组（imgSet='walk'）按创建时间编号，与问题清单（自动走查模式只列走查问题）口径一致 */
   const issueNos = useMemo(() => {
@@ -459,6 +533,14 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
     return m
   }, [walkIssues])
 
+  /** 聚焦条展示用：去掉命中技能标注后的干净描述与命中技能名（模块3） */
+  const focusClean = focusIssue
+    ? {
+        desc: stripSkillTags(focusIssue.description),
+        names: extractSkillTags(focusIssue.description)
+      }
+    : null
+
   /** 批量落库（imgSet='walk'），并按来源去重：程序校验结果（Token/元素清单/a11y）优先，AI 视觉仅保留未被覆盖的 */
   const saveIssues = async (
     diffs: StyleDiff[],
@@ -466,7 +548,7 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
     visualCandidates: Issue[],
     /** 额外去重基准：本次走查已先行落库的程序校验行（先于视觉轨落库） */
     specBase: Issue[] = []
-  ): Promise<{ structured: number; visual: number }> => {
+  ): Promise<{ structured: number; visual: number; visualSaved: Issue[] }> => {
     const now = Date.now()
     const rows: Issue[] = diffs.map((d, i) => ({
       id: genId(),
@@ -502,20 +584,25 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
       await db.issues.bulkAdd(rows)
       void touchPage(page.id)
     }
-    return { structured: structuredRows.length, visual: rows.length - structuredRows.length }
+    return {
+      structured: structuredRows.length,
+      visual: rows.length - structuredRows.length,
+      /** 本次实际落库的视觉问题行（模块3 运行记录联查用） */
+      visualSaved: rows.slice(structuredRows.length)
+    }
   }
 
-  // ===== 开始走查：校验 → Figma 画板宽度 → 打开弹窗 + 下发视口 → 等待弹窗回传 =====
+  // ===== 重新走查（rewalk 按钮 / 手动入口）：校验 → 加载页面 → 自动采集 =====
   const startWalk = async () => {
-    if (running || waiting) return
-    const devUrl = resolveDevUrl(devUrlInput)
+    if (running) return
+    const devUrl = resolveDevUrl(page.devUrl ?? '')
     if (!devUrl) {
-      setMsg({ ok: false, text: t('errDevUrl') })
+      setMsg({ ok: false, text: t('errNoDevUrl') })
       return
     }
-    const figUrl = figUrlInput.trim()
+    const figUrl = page.figmaUrl?.trim() ?? ''
     if (!figUrl) {
-      setMsg({ ok: false, text: t('errFigmaUrl') })
+      setMsg({ ok: false, text: t('errNoFigmaUrl') })
       return
     }
     if (walkDesignUrl || walkShotUrl) {
@@ -549,23 +636,21 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
       }
       setFigmaWidth(size.width)
       if (size.height) setFigmaHeight(size.height)
-      // 弹窗视口默认取 Figma 画板原始宽高（高度超出上限时收敛，整页采集时弹窗内会自动拉高）
-      const vpHeight = Math.min(21600, Math.max(240, size.height ?? WALK_VP_HEIGHT))
-      const vp = { width: size.width, height: vpHeight, autoWidth: true }
-      // 2. 保存连接与 URL，打开开发浏览器弹窗并下发视口
+      // 2. 保存连接与 URL，在下方内嵌画板加载页面后自动采集
       await db.pages.update(page.id, { figmaUrl: figUrl, devUrl, updatedAt: Date.now() })
-      setLoadedUrl(devUrl)
-      const opened = await window.electronAPI.openDevBrowser(devUrl)
-      if (!opened.ok) {
-        setMsg({ ok: false, text: opened.message })
-        return
+      if (devUrl !== loadedUrl) {
+        // 换 URL：重新加载，pageLoaded 后由待采集 effect 接手
+        pendingCaptureRef.current = true
+        setPageLoaded(false)
+        setLoadedUrl(devUrl)
+      } else if (pageLoaded) {
+        // 同一页面已加载：直接采集
+        void runEmbeddedCapture()
+      } else {
+        // 同一页面未加载完成：reload，加载完成后由待采集 effect 接手
+        pendingCaptureRef.current = true
+        devBrowserRef.current?.reload()
       }
-      window.electronAPI.setDevViewport(vp)
-      setWaiting(true)
-      setMsg({
-        ok: true,
-        text: t('walkOpened', { w: vp.width, h: vp.height, name: size.nodeName ?? 'Frame' })
-      })
     } catch (err) {
       setMsg({ ok: false, text: err instanceof Error ? err.message : String(err) })
     } finally {
@@ -651,9 +736,8 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
     createdAt: Date.now() + i
   })
 
-  // ===== 弹窗回传采集结果 → 保存双图 → 程序轨校验（Token / 元素清单 / 可选 a11y）→ AI 视觉走查 =====
+  // ===== 采集回传 → 保存双图 → 程序轨校验（Token / 元素清单 / 可选 a11y）→ AI 视觉走查 =====
   const handleCaptured = async (cap: WalkCapture) => {
-    setWaiting(false)
     setRunning(true)
     setMsg({ ok: true, text: t('capturedReading') })
     /** 后台任务 id（注册前出错时为 null，catch 里按需上报失败） */
@@ -662,7 +746,7 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
       const cfg = await window.electronAPI.getConfig()
       const pat = patFromConfig(cfg)
       if (!pat) throw new Error(t('errNoPat'))
-      const figUrl = figUrlInput.trim() || page.figmaUrl || ''
+      const figUrl = page.figmaUrl?.trim() || ''
       const fig = await window.electronAPI.figmaFetchDesign({ pat, figmaUrl: figUrl })
       if (!fig.ok || !fig.data) throw new Error(fig.message)
       // 保存走查独立双图（清理旧的走查图，不动手动上传的双图）
@@ -754,6 +838,8 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
       // 注册后台任务：切换页面不影响识别，返回页面时从这里恢复状态
       taskId = useAiTasksStore.getState().start(page.id, page.pageName)
       setMsg({ ok: true, text: t('aiRunning') })
+      // 自动走查技能集：与手动标注页同一套拼接规则，把选中技能转为指引文本注入识别请求
+      const skillGuides = buildSkillGuides(skills, skillIds)
       const res = await window.electronAPI.aiAnnotate({
         modelId,
         pageName: page.pageName,
@@ -766,7 +852,8 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
           analysisLabels: WALK_ANALYSES.filter((a) => checkOptions.analysis.includes(a.key)).map((a) => a.label),
           style: checkOptions.style,
           specSummary: specToks.length ? formatSpecSummary(specToks) : undefined
-        }
+        },
+        skillGuides: skillGuides.length ? skillGuides : undefined
       })
       // 任务被用户中断：丢弃结果，不落库
       if (useAiTasksStore.getState().tasks.find((t) => t.id === taskId)?.status === 'interrupted') {
@@ -798,7 +885,7 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
         designRoot: lastRun.designRoot,
         frameSize: lastRun.frameSize
       })
-      const { visual } = await saveIssues([], visualRows, [...specRows, ...elementRows, ...a11yRows])
+      const { visual, visualSaved } = await saveIssues([], visualRows, [...specRows, ...elementRows, ...a11yRows])
       const total = res.issues?.length ?? 0
       let doneText = total
         ? t('visualDone', { count: visual, dup: total - visual })
@@ -808,6 +895,17 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
       if (a11yRows.length) doneText += ` ${t('a11yFound', { count: a11yRows.length })}`
       useAiTasksStore.getState().finish(taskId, true, doneText)
       setMsg({ ok: true, text: doneText })
+      // 记录本次走查运行元信息（模块3 技能效果统计：localStorage，问题本体联查当前问题库）
+      setWalkRuns(
+        appendWalkRun({
+          ts: Date.now(),
+          pageId: page.id,
+          pageName: page.pageName,
+          skillUsed: skillGuides.length > 0,
+          skillNames: skills.filter((s) => skillIds.includes(s.id)).map((s) => s.name),
+          issueIds: visualSaved.map((i) => i.id)
+        })
+      )
       // 高级调试开启时，AI 完成后自动补跑一次结构化 diff
       if (cfg.walkAdvancedDebug === true) await runStructured({ force: true })
     } catch (err) {
@@ -854,7 +952,7 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
 
   // ===== 高级调试：结构化尺寸 diff（默认关闭；弹窗手动运行，或开启后随走查自动补跑） =====
   const runStructured = async (opts?: { force?: boolean }) => {
-    if (!opts?.force && (running || waiting)) return
+    if (!opts?.force && running) return
     const run = lastRunRef.current
     if (!run || !run.designRoot || !run.domRoot) {
       setMsg({ ok: false, text: t('structuredStale') })
@@ -862,6 +960,9 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
     }
     setRunning(true)
     setMsg({ ok: true, text: t('matching') })
+    // 重跑时清空上一次分层旁路摘要与抽屉，避免残留
+    setLayeredResult(null)
+    setLayeredOpen(false)
     try {
       const cfg = await window.electronAPI.getConfig()
       // 检查深度映射：容差倍率（宽松 ×2 / 标准 ×1 / 严格 ÷2）；宽高与内边距/间距仅严格模式比对
@@ -882,6 +983,9 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
         viewport: run.viewport ?? { width: figmaWidth ?? 1440, height: figmaHeight ?? WALK_VP_HEIGHT },
         includeSizeSpacing: checkOptions.depth === 'strict'
       })
+      // 分层旁路结果：仅摘要展示与明细抽屉（不落库、不进问题清单、不进报告）
+      const layered = cmp.layered?.enabled ? cmp.layered : null
+      if (layered) setLayeredResult(layered)
       // 拆分：高置信度自动落库；低置信度进人工确认
       const autoDiffs = cmp.diffs.filter((d) => d.matchConfidence >= CONFIRM_THRESHOLD)
       const pending: PendingPair[] = cmp.pairs
@@ -908,7 +1012,14 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
             ? t('structuredDup')
             : t('structuredNone'),
         pending.length ? t('pendingConfirm', { count: pending.length }) : '',
-        t('unmatched', { d: cmp.unmatchedDesignCount, e: cmp.unmatchedDomCount })
+        t('unmatched', { d: cmp.unmatchedDesignCount, e: cmp.unmatchedDomCount }),
+        layered
+          ? t('layeredSummary', {
+              score: Math.round(layered.score),
+              moduleAbsorbed: layered.moduleAbsorbed,
+              elementReported: layered.elementReported
+            })
+          : ''
       ].filter(Boolean)
       setMsg({ ok: true, text: parts.join(t('sep')) })
       if (pending.length) setPendingPairs(pending)
@@ -935,12 +1046,18 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
     return url
   }
 
-  /** 内嵌模式：回车加载下方预览浏览器 */
-  const loadEmbedded = (): void => {
-    const url = resolveDevUrl(devUrlInput)
-    if (url) {
-      setLoadedUrl(url)
-      void db.pages.update(page.id, { devUrl: url })
+  /** 内嵌画板采集：直接调用 DevBrowser 采集 DOM + 截图，走弹窗同一条回传处理链路 */
+  const runEmbeddedCapture = async (): Promise<void> => {
+    if (!devBrowserRef.current || embedSending) return
+    setEmbedSending(true)
+    try {
+      // 采集尺寸按 Figma 画板设计尺寸：高度用 figmaHeight（未取到时回退文档实际高度）
+      const cap = await devBrowserRef.current.runCapture(true, figmaHeight ?? undefined)
+      void capturedRef.current(cap)
+    } catch (err) {
+      setMsg({ ok: false, text: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setEmbedSending(false)
     }
   }
 
@@ -962,6 +1079,14 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
   const toggleAdvancedDebug = (v: boolean) => {
     setAdvancedDebug(v)
     void window.electronAPI.setConfig('walkAdvancedDebug', v)
+  }
+
+  /** 切换分层还原度判定开关：只翻 enabled，写回前重读配置合并，避免覆盖 Settings 页修改的容差/权重 */
+  const toggleLayered = async (v: boolean) => {
+    setLayeredEnabled(v)
+    const cfg = await window.electronAPI.getConfig()
+    const cur = normalizeLayeredTolerance(cfg.walkLayeredTolerance as Partial<LayeredToleranceConfig> | undefined)
+    void window.electronAPI.setConfig(LAYERED_TOLERANCE_KEY, { ...cur, enabled: v })
   }
 
   /** 走查结果编辑保存（与手动标注一致的编辑弹窗） */
@@ -1034,7 +1159,16 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
     setMsg({ ok: finished.every((t) => t.status === 'done'), text: finished[finished.length - 1].message })
     finished.forEach((t) => useAiTasksStore.getState().clear(t.id))
   }, [aiTasks, page.id])
-  const busy = running || waiting || aiTaskRunning
+  const busy = running || embedSending || aiTaskRunning
+
+  // 点击「开始走查」后：页面加载完成且视口尺寸就绪即自动发起采集（空态不做实时预览，也不自动走查）
+  useEffect(() => {
+    if (!pendingCaptureRef.current) return
+    if (!loadedUrl || !pageLoaded || embedSending || running || aiTaskRunning) return
+    if (figmaWidth === null) return
+    pendingCaptureRef.current = false
+    void runEmbeddedCapture()
+  }, [loadedUrl, pageLoaded, embedSending, running, aiTaskRunning, figmaWidth])
 
   /** 分类标签（cat_* key，连字符转下划线） */
   const enumKey = (v: string) => v.replace(/-/g, '_')
@@ -1087,29 +1221,10 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
 
   return (
     <div className="auto-walk">
-      {(controlsOpen || msg || waiting || aiTaskRunning) && (
+      {(controlsOpen || msg || aiTaskRunning) && (
       <div className="auto-walk-controls card">
         {controlsOpen && (
           <>
-        <div className="auto-walk-row">
-          <label className="field-label inline">{t('figmaConnLabel')}</label>
-          <input
-            className="input auto-walk-url"
-            placeholder={t('figmaUrlPlaceholder')}
-            value={figUrlInput}
-            onChange={(e) => setFigUrlInput(e.target.value)}
-          />
-        </div>
-        <div className="auto-walk-row">
-          <label className="field-label inline">{t('devUrlLabel')}</label>
-          <input
-            className="input auto-walk-url"
-            placeholder={t('devUrlPlaceholder')}
-            value={devUrlInput}
-            onChange={(e) => setDevUrlInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && loadEmbedded()}
-          />
-        </div>
         <div className="auto-walk-row auto-walk-actions">
           <button className="btn-secondary" onClick={() => setCheckOpen(true)} disabled={running}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -1137,27 +1252,21 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
         </div>
           </>
         )}
-        {(msg || waiting || aiTaskRunning) && (
-          <p className={`auto-walk-msg ${msg ? (msg.ok ? 'ok' : 'err') : 'ok'}`}>
-            {msg
-              ? msg.text
-              : waiting
-                ? t('waitingCapture')
-                : t('aiTaskRunning')}
-            {waiting && (
-              <button
-                type="button"
-                className="auto-walk-cancel"
-                onClick={() => {
-                  setWaiting(false)
-                  setMsg(null)
-                }}
-              >
-                {t('cancelWait')}
+        {(msg || aiTaskRunning) && (
+          <p
+            className={`auto-walk-msg ${msg ? (msg.ok ? 'ok' : 'err') : 'ok'}`}
+            /* flex 布局对齐提示条：文字与右侧关闭按钮垂直居中（同 .ai-msg 通知条方案，global.css 不可改走内联样式） */
+            style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap' }}
+          >
+            {msg ? msg.text : t('aiTaskRunning')}
+            {/* 分层还原度旁路：有摘要且消息条存活时可查看明细（只读抽屉，不落库不进报告） */}
+            {layeredResult && msg && (
+              <button type="button" className="auto-walk-cancel" onClick={() => setLayeredOpen(true)}>
+                {t('layeredDetail')}
               </button>
             )}
             {/* 完成类通知条支持手动关闭（AI 视觉走查完成 / 结构化分析完成等） */}
-            {msg && !waiting && (
+            {msg && (
               <button
                 type="button"
                 className="auto-walk-msg-close"
@@ -1178,6 +1287,11 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
           {(walkIssues.length > 0 && (visualCount > 0 || specCount > 0 || elementCount > 0 || a11yCount > 0 || manualCount > 0 || walkCategories.length > 0)) && (
             <div className="aw-filters">
               <div className="aw-chip-group">
+                {/* 技能效果统计入口（模块3）：横幅最左侧，点击弹出统计弹窗 */}
+                <button type="button" className="aw-chip" title={t('statsTitle')} onClick={() => setStatsOpen(true)}>
+                  {t('statsTitle')}
+                </button>
+                <span className="aw-filter-sep" />
                 {([
                   { key: 'all', label: t('filterAll', { n: walkIssues.length }) },
                   ...(visualCount ? [{ key: 'visual', label: t('filterVisual', { n: visualCount }) }] : []),
@@ -1199,6 +1313,30 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
                   </button>
                 ))}
               </div>
+              {walkSkillNames.length > 0 && <span className="aw-filter-sep" />}
+              {/* 技能筛选组：仅看命中该技能的问题（模块3；插在层与分类组之间，分类组保持 last-child 右对齐） */}
+              {walkSkillNames.length > 0 && (
+                <div className="aw-chip-group">
+                  <button
+                    type="button"
+                    className={`aw-chip${skillFilter === null ? ' active' : ''}`}
+                    onClick={() => setSkillFilter(null)}
+                  >
+                    {t('skillFilterAll')}
+                  </button>
+                  {walkSkillNames.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      className={`aw-chip aw-chip-skill${skillFilter === name ? ' active' : ''}`}
+                      title={t('onlySkill', { skill: name })}
+                      onClick={() => setSkillFilter(skillFilter === name ? null : name)}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
               {walkCategories.length > 0 && <span className="aw-filter-sep" />}
               {walkCategories.length > 0 && (
                 <div className="aw-chip-group">
@@ -1224,14 +1362,19 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
               )}
             </div>
           )}
-          {/* 聚焦查看提示条：双图只显示当前问题点位，可退出 */}
-          {focusIssue && (
+          {/* 聚焦查看提示条：双图只显示当前问题点位，可退出；描述剥离命中技能标注，命中技能以小标签展示（模块3） */}
+          {focusIssue && focusClean && (
             <div className="aw-focus-bar">
               <span>
                 {t('focusing', {
-                  desc: focusIssue.description.length > 32 ? `${focusIssue.description.slice(0, 32)}…` : focusIssue.description
+                  desc: focusClean.desc.length > 32 ? `${focusClean.desc.slice(0, 32)}…` : focusClean.desc
                 })}
               </span>
+              {focusClean.names.map((name) => (
+                <em key={name} className="aw-skill-tag">
+                  {name}
+                </em>
+              ))}
               {onExitFocus && (
                 <button type="button" onClick={onExitFocus}>
                   {t('exitFocus')}
@@ -1317,8 +1460,24 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
             {t('resultHint')}
           </p>
         </div>
-      ) : popupMode ? (
+      ) : (
         <div className="auto-walk-empty card">
+          {/* 隐藏挂载采集画板：仅供「开始走查」后台加载页面并采集截图，不做实时预览 */}
+          <div
+            aria-hidden
+            style={{ position: 'absolute', inset: 0, opacity: 0, pointerEvents: 'none', zIndex: -1, overflow: 'hidden' }}
+          >
+            <DevBrowser
+              ref={devBrowserRef}
+              url={loadedUrl}
+              viewport={previewVp}
+              displayScale={1}
+              hideBar
+              hideScrollbar
+              onFail={(m) => setMsg({ ok: false, text: m })}
+              onLoadingChange={(loading) => setPageLoaded(!loading)}
+            />
+          </div>
           <EmptyIllustration />
           <h3>{t('emptyTitle')}</h3>
           <p>
@@ -1329,10 +1488,10 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
           <button className="btn-primary aw-start-btn" onClick={startWalk} disabled={busy}>
             {running
               ? t('preparing')
-              : waiting
-                ? t('waitingCaptureBtn')
-                : aiTaskRunning
-                  ? aiTasks.find((task) => task.status === 'running' && task.pageId === page.id)?.message ?? t('aiRecognizing')
+              : aiTaskRunning
+                ? aiTasks.find((task) => task.status === 'running' && task.pageId === page.id)?.message ?? t('aiRecognizing')
+                : embedSending
+                  ? t('capturing')
                   : (
               <>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
@@ -1343,33 +1502,6 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
             )}
           </button>
         </div>
-      ) : (
-        <>
-          <div ref={stageRef} className="auto-walk-stage">
-            <DevBrowser
-              url={loadedUrl}
-              viewport={previewVp}
-              displayScale={displayScale}
-              onFail={(m) => setMsg({ ok: false, text: m })}
-            />
-          </div>
-          <button className="btn-primary aw-start-btn aw-start-inline" onClick={startWalk} disabled={busy}>
-            {running
-              ? t('preparing')
-              : waiting
-                ? t('waitingCaptureBtn')
-                : aiTaskRunning
-                  ? aiTasks.find((task) => task.status === 'running' && task.pageId === page.id)?.message ?? t('aiRecognizing')
-                  : (
-              <>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                  <path d="M8 5.5v13l11-6.5z" />
-                </svg>
-                {t('startWalk')}
-              </>
-            )}
-          </button>
-        </>
       )}
 
       {pendingPairs && (
@@ -1380,17 +1512,51 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
         />
       )}
 
+      {layeredOpen && layeredResult && (
+        <LayeredResultDrawer summary={layeredResult} onClose={() => setLayeredOpen(false)} />
+      )}
+
+      {statsOpen && (
+        <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && setStatsOpen(false)}>
+          <div className="modal">
+            <h3>{t('statsTitle')}</h3>
+            <SkillStatsPanel runs={walkRuns} issues={walkIssues} open onToggle={() => setStatsOpen(false)} />
+            <div className="modal-actions">
+              <span className="modal-spacer" />
+              <button className="btn-secondary" onClick={() => setStatsOpen(false)}>
+                {t('close')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {checkOpen && (
-        <WalkCheckOptionsModal initial={checkOptions} onSave={saveCheckOptions} onCancel={() => setCheckOpen(false)} />
+        <WalkCheckOptionsModal
+          initial={checkOptions}
+          skills={skills}
+          skillIds={skillIds}
+          onSkillChange={(ids) => {
+            setSkillIds(ids)
+            localStorage.setItem(SKILL_LAST_KEY, JSON.stringify(ids))
+          }}
+          onSaveSkillDefault={(ids) => {
+            localStorage.setItem(SKILL_DEFAULT_KEY, JSON.stringify(ids))
+            setMsg({ ok: true, text: t('skillDefaultSaved') })
+          }}
+          onSave={saveCheckOptions}
+          onCancel={() => setCheckOpen(false)}
+        />
       )}
       {tolOpen && (
         <WalkAdvancedModal
           initial={tolerance}
           debugEnabled={advancedDebug}
+          layeredEnabled={layeredEnabled}
           canRun={!!(lastRunRef.current?.designRoot && lastRunRef.current?.domRoot) && !busy}
-          busy={running || waiting}
+          busy={running}
           onSave={saveTolerance}
           onToggleDebug={toggleAdvancedDebug}
+          onChangeLayeredEnabled={(v) => void toggleLayered(v)}
           onRun={() => {
             setTolOpen(false)
             void runStructured({ force: true })

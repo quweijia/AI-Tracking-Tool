@@ -6,8 +6,14 @@
 	objectVersion = 70;
 	objects = {
 
+/* Begin PBXBuildFile section */
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		4C1A0000000000000000000A /* UITWalkthrough.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = UITWalkthrough.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4C1A00000000000000000017 /* DesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DesignTokens.swift; path = Design/DesignTokens.swift; sourceTree = "<group>"; };
+		4C1A00000000000000000018 /* AppComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppComponents.swift; path = Design/AppComponents.swift; sourceTree = "<group>"; };
+		4C1A00000000000000000019 /* AppSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppSidebar.swift; path = Design/AppSidebar.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -33,6 +39,7 @@
 			isa = PBXGroup;
 			children = (
 				4C1A00000000000000000001 /* UITWalkthrough */,
+				4C1A00000000000000000016 /* Design */,
 				4C1A0000000000000000000D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -43,6 +50,16 @@
 				4C1A0000000000000000000A /* UITWalkthrough.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		4C1A00000000000000000016 /* Design */ = {
+			isa = PBXGroup;
+			children = (
+				4C1A00000000000000000017 /* DesignTokens.swift */,
+				4C1A00000000000000000018 /* AppComponents.swift */,
+				4C1A00000000000000000019 /* AppSidebar.swift */,
+			);
+			name = Design;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */

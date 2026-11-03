@@ -4,8 +4,20 @@ import cursorAiUrl from '../assets/dock-icons/cursor-ai.png'
 import letterDarkUrl from '../assets/dock-icons/letter-dark.png'
 import cursorUrl from '../assets/dock-icons/cursor.png'
 import letterLightUrl from '../assets/dock-icons/letter-light.png'
+import annotationUrl from '../assets/dock-icons/annotation.png'
+import cursorAiLightUrl from '../assets/dock-icons/cursor-ai-light.png'
+import cursorAiDarkUrl from '../assets/dock-icons/cursor-ai-dark.png'
 
-export type AppIconKey = 'default' | 'compare' | 'cursor-ai' | 'letter-dark' | 'cursor' | 'letter-light'
+export type AppIconKey =
+  | 'default'
+  | 'compare'
+  | 'cursor-ai'
+  | 'letter-dark'
+  | 'cursor'
+  | 'letter-light'
+  | 'annotation'
+  | 'cursor-ai-light'
+  | 'cursor-ai-dark'
 
 export interface AppIconOption {
   key: AppIconKey
@@ -15,11 +27,14 @@ export interface AppIconOption {
 
 /** 可选的自定义图标（默认项使用当前应用 icon，在设置页单独渲染） */
 export const APP_ICONS: AppIconOption[] = [
-  { key: 'compare', label: '双卡对比', url: compareUrl },
-  { key: 'cursor-ai', label: 'AI 光标', url: cursorAiUrl },
-  { key: 'cursor', label: '取景光标', url: cursorUrl },
   { key: 'letter-dark', label: '星环 A · 深色', url: letterDarkUrl },
-  { key: 'letter-light', label: '星环 A · 浅色', url: letterLightUrl }
+  { key: 'letter-light', label: '星环 A · 浅色', url: letterLightUrl },
+  { key: 'cursor-ai', label: 'AI 光标', url: cursorAiUrl },
+  { key: 'cursor-ai-dark', label: 'AI 光标 · 深色', url: cursorAiDarkUrl },
+  { key: 'cursor-ai-light', label: 'AI 光标 · 浅色', url: cursorAiLightUrl },
+  { key: 'cursor', label: '取景光标', url: cursorUrl },
+  { key: 'compare', label: '双卡对比', url: compareUrl },
+  { key: 'annotation', label: 'AI 标注', url: annotationUrl }
 ]
 
 /** 按 key 找图标（含 default，default 无 url，由调用方提供当前应用 icon） */

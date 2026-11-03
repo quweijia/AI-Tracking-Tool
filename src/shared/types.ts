@@ -218,6 +218,140 @@ export interface CompareResult {
   /** 未匹配上的设计稿节点（数量提示用） */
   unmatchedDesignCount: number
   unmatchedDomCount: number
+  /** 分层误差旁路结果（仅 walkLayeredTolerance.enabled=true 时返回，否则缺省） */
+  layered?: LayeredRunSummary
+}
+
+/** ───────────── 分层误差模型（v3 旁路：容器/控件两级 × 位置/尺寸两维） ───────────── */
+
+/** 节点分类：容器（布局承载）/ 控件（交互/内容单元）/ 文本 */
+export type NodeKind = 'container' | 'control' | 'text'
+
+/** 误差层级：模块级（容器整体）/ 元素级（控件与文本） */
+export type ErrorLevel = 'module' | 'element'
+
+/** 误差维度：位置（中心点偏移）/ 尺寸（宽高偏差） */
+export type ErrorDim = 'position' | 'size'
+
+/** 分层容差配置（持久化在 walkthrough-config.json 的 walkLayeredTolerance 键） */
+export interface LayeredToleranceConfig {
+  /** 分层开关：默认关闭，关闭时不参与任何计算（与现状行为一致） */
+  enabled: boolean
+  /** 模块级位置容差 px，默认 4 */
+  modulePosTol: number
+  /** 模块级尺寸容差 px，默认 6 */
+  moduleSizeTol: number
+  /** 元素级位置容差 px，默认 2 */
+  elementPosTol: number
+  /** 元素级尺寸容差 px，默认 1 */
+  elementSizeTol: number
+  /** 模块级扣分权重（0~1），默认 0.4 */
+  weightModule: number
+  /** 元素级扣分权重（0~1），默认 0.6 */
+  weightElement: number
+  /** 位置维扣分权重（0~1），默认 0.5 */
+  weightPosition: number
+  /** 尺寸维扣分权重（0~1），默认 0.5 */
+  weightSize: number
+}
+
+export const DEFAULT_LAYERED_TOLERANCE: LayeredToleranceConfig = {
+  enabled: false,
+  modulePosTol: 4,
+  moduleSizeTol: 6,
+  elementPosTol: 2,
+  elementSizeTol: 1,
+  weightModule: 0.4,
+  weightElement: 0.6,
+  weightPosition: 0.5,
+  weightSize: 0.5
+}
+
+/** 配置持久化键名（walkthrough-config.json） */
+export const LAYERED_TOLERANCE_KEY = 'walkLayeredTolerance'
+
+/** 校正非法输入并合并默认值：容差 ≥0，权重 clamp 0~1，enabled 必须显式 true */
+export function normalizeLayeredTolerance(
+  raw: Partial<LayeredToleranceConfig> | undefined
+): LayeredToleranceConfig {
+  const merged = { ...DEFAULT_LAYERED_TOLERANCE, ...(raw ?? {}) }
+  const clampNum = (v: unknown, fallback: number, min: number, max: number): number => {
+    const n = Number(v)
+    if (!Number.isFinite(n)) return fallback
+    return Math.round(Math.max(min, Math.min(max, n)) * 100) / 100
+  }
+  return {
+    enabled: merged.enabled === true,
+    modulePosTol: clampNum(merged.modulePosTol, DEFAULT_LAYERED_TOLERANCE.modulePosTol, 0, Infinity),
+    moduleSizeTol: clampNum(
+      merged.moduleSizeTol,
+      DEFAULT_LAYERED_TOLERANCE.moduleSizeTol,
+      0,
+      Infinity
+    ),
+    elementPosTol: clampNum(
+      merged.elementPosTol,
+      DEFAULT_LAYERED_TOLERANCE.elementPosTol,
+      0,
+      Infinity
+    ),
+    elementSizeTol: clampNum(
+      merged.elementSizeTol,
+      DEFAULT_LAYERED_TOLERANCE.elementSizeTol,
+      0,
+      Infinity
+    ),
+    weightModule: clampNum(merged.weightModule, DEFAULT_LAYERED_TOLERANCE.weightModule, 0, 1),
+    weightElement: clampNum(merged.weightElement, DEFAULT_LAYERED_TOLERANCE.weightElement, 0, 1),
+    weightPosition: clampNum(merged.weightPosition, DEFAULT_LAYERED_TOLERANCE.weightPosition, 0, 1),
+    weightSize: clampNum(merged.weightSize, DEFAULT_LAYERED_TOLERANCE.weightSize, 0, 1)
+  }
+}
+
+/** 单条分层误差（与 StyleDiff 平行的旁路结果，不落现有 Issue 链路） */
+export interface LayeredErrorItem {
+  /** 误差层级 */
+  level: ErrorLevel
+  /** 误差维度 */
+  dim: ErrorDim
+  /** 绝对偏差 px（dx/dy 为中心点偏移分量，dw/dh 为宽高偏差，均取绝对值） */
+  deviation: { dx: number; dy: number; dw: number; dh: number }
+  /** 归一化偏差量：位置 = hypot(dx,dy)；尺寸 = max(dw,dh) */
+  delta: number
+  /** delta / 容差（≥1 才生成条目） */
+  ratio: number
+  /** 严重度（ratio≥3 major / ≥2 minor / 其余 suggestion，与 StyleDiff 三档对齐） */
+  severity: 'major' | 'minor' | 'suggestion'
+  /** 判定：模块级超容差一律 absorbed（被模块层吸收，不扣分）；元素级超容差 reported */
+  verdict: 'absorbed' | 'reported'
+  /** 扣分值：absorbed 恒为 0；reported = weightLevel × weightDim × min(ratio,3) × 2 */
+  score: number
+  /** 自适应容器（宽/高≥240 或名含布局关键词）：跳过尺寸维 */
+  adaptable: boolean
+  node: {
+    nodeKind: NodeKind
+    designName: string
+    figmaNodeId?: string
+    domPath?: string
+    /** DOM 节点相对视口的归一化坐标（与 StyleDiff.rect 同口径） */
+    rect: { x: number; y: number; width: number; height: number }
+  }
+  /** 匹配置信度（透传 MatchPair.confidence） */
+  confidence: number
+  /** 自动生成的差异描述 */
+  description: string
+}
+
+/** 分层旁路运行摘要（CompareResult.layered 字段类型） */
+export interface LayeredRunSummary {
+  enabled: boolean
+  /** 分层还原度总分 0~100（100 − Σ reported 扣分，clamp 0） */
+  score: number
+  /** 模块级被吸收的超容差条目数 */
+  moduleAbsorbed: number
+  /** 元素级 reported 条目数 */
+  elementReported: number
+  items: LayeredErrorItem[]
 }
 
 /** ───────────── 设计规范 Token（解析入库 / 走查校验 / 多格式导出共用） ───────────── */

@@ -36,6 +36,93 @@ function AssistantAvatar() {
   )
 }
 
+/** 消息文本分段：普通文本 或 markdown 表格 */
+type MsgSegment = { type: 'text'; text: string } | { type: 'table'; rows: string[][] }
+
+/** 判断是否表格行（以 | 开头） */
+function isTableRow(line: string): boolean {
+  return line.trimStart().startsWith('|')
+}
+
+/** 判断是否表头分隔行（| --- | :---: |） */
+function isSepRow(line: string): boolean {
+  return line.replace(/[|\s:-]/g, '') === ''
+}
+
+/** 拆一行表格为单元格 */
+function splitRow(line: string): string[] {
+  let s = line.trim()
+  if (s.startsWith('|')) s = s.slice(1)
+  if (s.endsWith('|')) s = s.slice(0, -1)
+  return s.split('|').map((c) => c.trim())
+}
+
+/** 把消息文本拆成 普通文本 / 表格 段落序列（流式中半截表格也能渲染） */
+function parseSegments(content: string): MsgSegment[] {
+  const lines = content.split('\n')
+  const segs: MsgSegment[] = []
+  let buf: string[] = []
+  const flush = (): void => {
+    if (buf.length) {
+      segs.push({ type: 'text', text: buf.join('\n') })
+      buf = []
+    }
+  }
+  let i = 0
+  while (i < lines.length) {
+    if (isTableRow(lines[i])) {
+      const rows: string[][] = []
+      while (i < lines.length && isTableRow(lines[i])) {
+        if (!isSepRow(lines[i])) rows.push(splitRow(lines[i]))
+        i++
+      }
+      flush()
+      segs.push({ type: 'table', rows })
+    } else {
+      buf.push(lines[i])
+      i++
+    }
+  }
+  flush()
+  return segs
+}
+
+/** 消息文本渲染：表格块渲染成 <table>，其余按普通文本（保留换行） */
+function MessageText({ content }: { content: string }) {
+  return (
+    <>
+      {parseSegments(content).map((seg, i) =>
+        seg.type === 'text' ? (
+          <span key={i}>{seg.text}</span>
+        ) : (
+          <table key={i} className="ai-msg-table">
+            {seg.rows.length > 0 && (
+              <thead>
+                <tr>
+                  {seg.rows[0].map((c, j) => (
+                    <th key={j}>{c}</th>
+                  ))}
+                </tr>
+              </thead>
+            )}
+            {seg.rows.length > 1 && (
+              <tbody>
+                {seg.rows.slice(1).map((r, j) => (
+                  <tr key={j}>
+                    {r.map((c, k) => (
+                      <td key={k}>{c}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            )}
+          </table>
+        )
+      )}
+    </>
+  )
+}
+
 export default function ChatMessages({ onSuggest, onRetry }: ChatMessagesProps) {
   const { t } = useTranslation('aiAssistant')
   const messages = useAiAssistantStore((s) => s.messages)
@@ -118,7 +205,9 @@ export default function ChatMessages({ onSuggest, onRetry }: ChatMessagesProps) 
               <div key={m.id} className="ai-msg ai-msg-assistant">
                 <AssistantAvatar />
                 <div className="ai-bubble ai-bubble-assistant">
-                  <div className="ai-bubble-text">{m.content}</div>
+                  <div className="ai-bubble-text">
+                    <MessageText content={m.content} />
+                  </div>
                   <button
                     type="button"
                     className="ai-bubble-copy"
@@ -143,8 +232,22 @@ export default function ChatMessages({ onSuggest, onRetry }: ChatMessagesProps) 
               <AssistantAvatar />
               <div className="ai-bubble ai-bubble-assistant ai-bubble-streaming">
                 <div className="ai-bubble-text">
-                  {streamText}
-                  <span className="ai-cursor" aria-hidden />
+                  {streamText ? (
+                    <>
+                      <MessageText content={streamText} />
+                      <span className="ai-cursor" aria-hidden />
+                    </>
+                  ) : (
+                    // 尚未收到首个字符：三点跳动提示生成中
+                    <span className="ai-thinking">
+                      {t('thinking')}
+                      <span className="ai-thinking-dots" aria-hidden>
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

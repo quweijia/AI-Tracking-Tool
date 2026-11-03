@@ -73,13 +73,13 @@ struct ReportsHomeView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(spacing: Spacing.xlg) {
                 hero
                 reportsCard
             }
-            .padding(20)
+            .padding(SizeTokens.cardPadding)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.appBg)
     }
 
     // MARK: - 派生数据
@@ -156,50 +156,47 @@ struct ReportsHomeView: View {
 
     private var hero: some View {
         HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Spacing.md) {
                 Text("用 AI 发现问题，让产品更好")
-                    .font(.system(size: 24, weight: .bold))
+                    .font(.system(size: FontTokens.Size.pageHeader, weight: .bold))
                     .foregroundStyle(.white)
                 Text("基于智能分析与专业检测，为您提供高质量的走查报告")
-                    .font(.subheadline)
+                    .font(.system(size: FontTokens.Size.bodySmall))
                     .foregroundStyle(.white.opacity(0.85))
                 HStack(spacing: 22) {
-                    feat(icon: "chart.pie", tint: .cyan, title: "多维度分析", desc: "全面检测")
-                    feat(icon: "scope", tint: .purple, title: "问题定位", desc: "精准高效")
-                    feat(icon: "wand.and.stars", tint: .teal, title: "专业建议", desc: "可执行方案")
+                    feat(icon: "chart.pie", tint: .primary, title: "多维度分析", desc: "全面检测")
+                    feat(icon: "scope", tint: .primaryDark, title: "问题定位", desc: "精准高效")
+                    feat(icon: "wand.and.stars", tint: .success, title: "专业建议", desc: "可执行方案")
                 }
-                .padding(.top, 6)
+                .padding(.top, Spacing.mg)
             }
             Spacer()
         }
-        .padding(24)
+        .padding(Spacing.hero)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             LinearGradient(
-                colors: [
-                    Color(red: 0.23, green: 0.38, blue: 0.92),
-                    Color(red: 0.48, green: 0.30, blue: 0.88)
-                ],
+                colors: [.primary, .primaryDark],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
-            in: RoundedRectangle(cornerRadius: 14)
+            in: RoundedRectangle(cornerRadius: Radius.lg)
         )
     }
 
     private func feat(icon: String, tint: Color, title: String, desc: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Spacing.md) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: FontTokens.Size.bodySmall, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 26, height: 26)
                 .background(tint.opacity(0.45), in: Circle())
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: Spacing.xs) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: FontTokens.Size.captionSmall, weight: .semibold))
                     .foregroundStyle(.white)
                 Text(desc)
-                    .font(.system(size: 10))
+                    .font(.system(size: FontTokens.Size.nano))
                     .foregroundStyle(.white.opacity(0.75))
             }
         }
@@ -208,7 +205,7 @@ struct ReportsHomeView: View {
     // MARK: - 报告列表卡片
 
     private var reportsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Spacing.lg) {
             toolbar
             if viewMode == .list {
                 listView
@@ -218,18 +215,18 @@ struct ReportsHomeView: View {
             pagination
             resultMsg
         }
-        .padding(16)
+        .padding(SizeTokens.cardPaddingSmall)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .background(Color.cardBg, in: RoundedRectangle(cornerRadius: Radius.lg))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.6))
+            RoundedRectangle(cornerRadius: Radius.lg)
+                .strokeBorder(Color.border, lineWidth: 1)
         )
     }
 
     /// 工具栏：项目筛选 + 搜索 + 视图切换
     private var toolbar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Spacing.mg) {
             Picker("", selection: $projectFilter) {
                 Text("全部项目").tag("all")
                 ForEach(projectOptions) { p in
@@ -242,19 +239,7 @@ struct ReportsHomeView: View {
 
             Spacer()
 
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                TextField("搜索报告名称、项目名称...", text: $keyword)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .frame(width: 190)
-                    .onChange(of: keyword) { _, _ in page = 1 }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(.quinary, in: RoundedRectangle(cornerRadius: 7))
+            AppInput($keyword, placeholder: "搜索报告名称、项目名称...")
 
             Picker("", selection: $viewMode) {
                 Image(systemName: "square.grid.2x2").tag(ViewMode.grid)
@@ -280,45 +265,45 @@ struct ReportsHomeView: View {
                     if expanded.contains(g.key) {
                         versionList(g)
                     }
-                    Divider().padding(.leading, 12)
+                    Divider().padding(.leading, Spacing.lg)
                 }
             }
         }
     }
 
     private var tableHeader: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Spacing.lg) {
             Text("报告名称").frame(minWidth: 240, maxWidth: .infinity, alignment: .leading)
             Text("项目 / 页面").frame(minWidth: 150, maxWidth: .infinity, alignment: .leading)
             Text("问题数").frame(width: Col.issues, alignment: .leading)
             Text("生成时间").frame(width: Col.time, alignment: .leading)
             Text("状态").frame(width: Col.status, alignment: .leading)
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+        .font(.system(size: FontTokens.Size.captionSmall))
+        .foregroundStyle(Color.textSecondary)
+        .padding(.horizontal, Spacing.lg)
+        .padding(.vertical, Spacing.md)
+        .background(.fill, in: RoundedRectangle(cornerRadius: Radius.tiny))
     }
 
     /// 组行：点击整行展开/收起历史版本；页面名可点击跳转工作台
     private func groupRow(_ g: ReportGroup) -> some View {
         let accepted = allPages.first { $0.id == g.pageId }?.accepted ?? false
         return row(
-            name: HStack(spacing: 10) {
+            name: HStack(spacing: Spacing.mg) {
                 thumb(g.pageName, large: false)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: Spacing.xs) {
+                    HStack(spacing: Spacing.sm) {
                         Text(g.pageName)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: FontTokens.Size.bodySmall, weight: .semibold))
                             .lineLimit(1)
                         Text("\(g.versions.count) 个版本")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: FontTokens.Size.caption))
+                            .foregroundStyle(Color.textSecondary)
                     }
                     Text(g.latest.record.name.isEmpty ? "走查报告-\(g.pageName).html" : g.latest.record.name)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: FontTokens.Size.captionSmall))
+                        .foregroundStyle(Color.textSecondary)
                         .lineLimit(1)
                 }
             },
@@ -339,10 +324,10 @@ struct ReportsHomeView: View {
                 let accepted = allPages.first { $0.id == g.pageId }?.accepted ?? false
                 let hasPath = !(v.record.filePath ?? "").isEmpty
                 row(
-                    name: HStack(spacing: 10) {
+                    name: HStack(spacing: Spacing.mg) {
                         verBadge(v.ver)
                         Text(v.displayName)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: FontTokens.Size.bodySmall, weight: .medium))
                             .lineLimit(1)
                     },
                     path: pathCell(projectId: g.projectId, pageId: g.pageId, pageName: g.pageName),
@@ -357,28 +342,28 @@ struct ReportsHomeView: View {
                 Divider().padding(.leading, 34)
             }
         }
-        .background(Color.primary.opacity(0.025))
+        .background(.primary.opacity(0.025))
     }
 
     /// 「项目 / 页面」单元格：项目名 + 可点击的页面名（跳转工作台）
     private func pathCell(projectId: String, pageId: String, pageName: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
             Text(projectName(projectId))
-                .font(.system(size: 13))
+                .font(.system(size: FontTokens.Size.bodySmall))
                 .lineLimit(1)
             if let pg = allPages.first(where: { $0.id == pageId }) {
                 Button {
                     appState.open(page: pg, context: context)
                 } label: {
                     Text(pg.pageName)
-                        .font(.caption)
+                        .font(.system(size: FontTokens.Size.captionSmall))
                         .lineLimit(1)
                 }
                 .buttonStyle(.link)
             } else {
                 Text("页面已删除")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: FontTokens.Size.captionSmall))
+                    .foregroundStyle(Color.textSecondary)
             }
         }
     }
@@ -391,20 +376,20 @@ struct ReportsHomeView: View {
         time: String,
         status: Bool
     ) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Spacing.lg) {
             name.frame(minWidth: 240, maxWidth: .infinity, alignment: .leading)
             path.frame(minWidth: 150, maxWidth: .infinity, alignment: .leading)
             Text("\(issues)")
-                .font(.system(size: 13))
+                .font(.system(size: FontTokens.Size.bodySmall))
                 .frame(width: Col.issues, alignment: .leading)
             Text(time)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.system(size: FontTokens.Size.captionSmall))
+                .foregroundStyle(Color.textSecondary)
                 .frame(width: Col.time, alignment: .leading)
             statusBadge(status)
                 .frame(width: Col.status, alignment: .leading)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Spacing.lg)
         .padding(.vertical, 9)
     }
 
@@ -412,8 +397,8 @@ struct ReportsHomeView: View {
 
     private var gridView: some View {
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 320), spacing: 14)],
-            spacing: 14
+            columns: [GridItem(.adaptive(minimum: 320), spacing: Spacing.xlg)],
+            spacing: Spacing.xlg
         ) {
             if pageGroups.isEmpty {
                 emptyHint
@@ -432,66 +417,62 @@ struct ReportsHomeView: View {
         let accepted = allPages.first { $0.id == g.pageId }?.accepted ?? false
         let open = expanded.contains(g.key)
         let latestHasPath = !(g.latest.record.filePath ?? "").isEmpty
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
+        return VStack(alignment: .leading, spacing: Spacing.lg) {
+            HStack(spacing: Spacing.mg) {
                 thumb(g.pageName, large: true)
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: Spacing.xs) {
                     Text(g.pageName)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: FontTokens.Size.body, weight: .semibold))
                         .lineLimit(1)
                         .help(g.pageName)
                     Text("\(projectName(g.projectId)) · \(g.versions.count) 个版本")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: FontTokens.Size.captionSmall))
+                        .foregroundStyle(Color.textSecondary)
                         .lineLimit(1)
                 }
                 Spacer()
                 statusBadge(accepted)
             }
-            HStack(spacing: 12) {
-                HStack(spacing: 3) {
+            HStack(spacing: Spacing.lg) {
+                HStack(spacing: Spacing.xs) {
                     Text("\(g.latest.record.total)")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold))
                     Text("个问题")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: FontTokens.Size.captionSmall))
+                        .foregroundStyle(Color.textSecondary)
                 }
                 Text(fmtTime(g.latest.record.createdAt))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: FontTokens.Size.captionSmall))
+                    .foregroundStyle(Color.textSecondary)
             }
-            HStack(spacing: 8) {
+            HStack(spacing: Spacing.md) {
                 if latestHasPath {
-                    Button("查看") { openReport(g.latest.record) }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
+                    AppButton("查看", style: .primary) { openReport(g.latest.record) }
                 } else {
                     Text("路径缺失")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: FontTokens.Size.captionSmall))
+                        .foregroundStyle(Color.textSecondary)
                 }
                 Spacer()
-                Button(open ? "收起版本" : "历史版本（\(g.versions.count - 1)）") {
+                AppButton(open ? "收起版本" : "历史版本（\(g.versions.count - 1)）", style: .text) {
                     toggle(g.key)
                 }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
             }
             if open {
-                VStack(spacing: 6) {
+                VStack(spacing: Spacing.mg) {
                     ForEach(Array(g.versions.reversed())) { v in
                         let hasPath = !(v.record.filePath ?? "").isEmpty
                         Button {
                             openReport(v.record)
                         } label: {
-                            HStack(spacing: 8) {
+                            HStack(spacing: Spacing.md) {
                                 verBadge(v.ver)
                                 Text(fmtTime(v.record.createdAt))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .font(.system(size: FontTokens.Size.captionSmall))
+                                    .foregroundStyle(Color.textSecondary)
                                 Spacer()
                                 Text("\(v.record.total) 问题")
-                                    .font(.caption)
+                                    .font(.system(size: FontTokens.Size.captionSmall))
                             }
                             .contentShape(Rectangle())
                         }
@@ -500,16 +481,16 @@ struct ReportsHomeView: View {
                         .help(hasPath ? "打开该版本报告" : "旧版本未记录文件路径，请重新导出")
                     }
                 }
-                .padding(8)
-                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                .padding(Spacing.md)
+                .background(.fill, in: RoundedRectangle(cornerRadius: Radius.sm))
             }
         }
-        .padding(14)
+        .padding(SizeTokens.cardPaddingCompact + 4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .background(Color.cardBg, in: RoundedRectangle(cornerRadius: Radius.lg))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.6))
+            RoundedRectangle(cornerRadius: Radius.lg)
+                .strokeBorder(Color.border, lineWidth: 1)
         )
     }
 
@@ -518,12 +499,12 @@ struct ReportsHomeView: View {
     @ViewBuilder
     private var pagination: some View {
         if !filtered.isEmpty {
-            HStack(spacing: 10) {
+            HStack(spacing: Spacing.mg) {
                 Text("共 \(filtered.count) 组报告")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: FontTokens.Size.captionSmall))
+                    .foregroundStyle(Color.textSecondary)
                 Spacer()
-                HStack(spacing: 2) {
+                HStack(spacing: Spacing.xs) {
                     Button {
                         page = safePage - 1
                     } label: {
@@ -535,14 +516,14 @@ struct ReportsHomeView: View {
                             page = n
                         } label: {
                             Text("\(n)")
-                                .font(.caption)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
+                                .font(.system(size: FontTokens.Size.captionSmall))
+                                .padding(.horizontal, Spacing.mg)
+                                .padding(.vertical, Spacing.xs)
                                 .background(
-                                    n == safePage ? Color.accentColor.opacity(0.15) : Color.clear,
+                                    n == safePage  ? Color.primarySoft : Color.clear,
                                     in: Capsule()
                                 )
-                                .foregroundStyle(n == safePage ? Color.accentColor : Color.primary)
+                                .foregroundStyle(n == safePage  ? Color.primary : .textSecondary)
                         }
                         .buttonStyle(.plain)
                     }
@@ -569,18 +550,18 @@ struct ReportsHomeView: View {
         Text(groups.isEmpty
             ? "暂无导出记录，在对比工作台右上角「导出报告」导出 HTML 报告后，这里会自动汇总"
             : "当前筛选条件下暂无报告")
-            .font(.callout)
-            .foregroundStyle(.secondary)
+            .font(.system(size: FontTokens.Size.bodySmall))
+            .foregroundStyle(Color.textSecondary)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 48)
+            .padding(.vertical, Spacing.xhuge)
     }
 
     @ViewBuilder
     private var resultMsg: some View {
         if let msg {
             Text(msg.text)
-                .font(.callout)
-                .foregroundStyle(msg.ok ? Color.green : Color.red)
+                .font(.system(size: FontTokens.Size.bodySmall))
+                .foregroundStyle(msg.ok  ? Color.success : .danger)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -596,10 +577,7 @@ struct ReportsHomeView: View {
             .frame(width: size, height: size)
             .background(
                 LinearGradient(
-                    colors: [
-                        Color(red: 0.30, green: 0.50, blue: 0.95),
-                        Color(red: 0.55, green: 0.35, blue: 0.90)
-                    ],
+                    colors: [.primary, .primaryDark],
                     startPoint: .top,
                     endPoint: .bottom
                 ),
@@ -610,28 +588,28 @@ struct ReportsHomeView: View {
     /// 版本徽章：ver = 1（最早导出）显示「最新」，其余 V{n}
     private func verBadge(_ ver: Int) -> some View {
         Text(ver == 1 ? "最新" : "V\(ver)")
-            .font(.caption2)
+            .font(.system(size: FontTokens.Size.caption))
             .fontWeight(.semibold)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
+            .padding(.horizontal, Spacing.mg)
+            .padding(.vertical, Spacing.xs)
             .background(
-                ver == 1 ? Color.green.opacity(0.15) : Color.primary.opacity(0.07),
+                ver == 1  ? Color.success.opacity(0.15) : .primary.opacity(0.07),
                 in: Capsule()
             )
-            .foregroundStyle(ver == 1 ? Color.green : Color.secondary)
+            .foregroundStyle(ver == 1  ? Color.success : .textSecondary)
     }
 
     /// 页面验收状态徽章
     private func statusBadge(_ accepted: Bool) -> some View {
         Text(accepted ? "已完成" : "进行中")
-            .font(.caption2)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
+            .font(.system(size: FontTokens.Size.caption))
+            .padding(.horizontal, Spacing.mg)
+            .padding(.vertical, Spacing.xs)
             .background(
-                (accepted ? Color.green : Color.orange).opacity(0.15),
+                (accepted  ? Color.success : .warning).opacity(0.15),
                 in: Capsule()
             )
-            .foregroundStyle(accepted ? Color.green : Color.orange)
+            .foregroundStyle(accepted  ? Color.success : .warning)
     }
 
     // MARK: - 操作

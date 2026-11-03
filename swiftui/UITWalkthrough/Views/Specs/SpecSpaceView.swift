@@ -34,18 +34,18 @@ struct SpecPill: View {
 
     private var color: Color {
         switch tone {
-        case .ok: .green
-        case .warn: .orange
-        case .err: .red
-        case .gray: .secondary
+        case .ok: .success
+        case .warn: .warning
+        case .err: .danger
+        case .gray: .textSecondary
         }
     }
 
     var body: some View {
         Text(text)
-            .font(.caption2.weight(.medium))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
+            .font(.system(size: FontTokens.Size.captionSmall, weight: .medium))
+            .padding(.horizontal, Spacing.mg)
+            .padding(.vertical, Spacing.xs)
             .background(color.opacity(0.14), in: Capsule())
             .foregroundStyle(color)
     }
@@ -56,9 +56,9 @@ struct SyncStateDot: View {
     let label: String
     var ok: Bool
     var body: some View {
-        HStack(spacing: 4) {
-            Circle().fill(ok ? Color.green : Color.secondary.opacity(0.5)).frame(width: 6, height: 6)
-            Text(label).font(.caption).foregroundStyle(ok ? Color.green : .secondary)
+        HStack(spacing: Spacing.xxs) {
+            Circle().fill(ok  ? Color.success : .textSecondary.opacity(0.5)).frame(width: 6, height: 6)
+            Text(label).font(.system(size: FontTokens.Size.captionSmall)).foregroundStyle(ok  ? Color.success : .textSecondary)
         }
     }
 }
@@ -71,14 +71,14 @@ struct SpecPlatformIcon: View {
     var body: some View {
         Image(systemName: icon)
             .font(.system(size: size))
-            .foregroundStyle(.tint)
+            .foregroundStyle(Color.primary)
     }
 
     private var icon: String {
         switch platform {
         case .h5: "iphone"
         case .pc: "laptopcomputer"
-        case .dashboard: "chart.bar.fill"
+        case .dashboard: "chart.barColor.fill"
         case .electron: "menubar.dock.rectangle"
         }
     }
@@ -90,8 +90,8 @@ struct TokenSwatch: View {
     var size: CGFloat = 12
     var body: some View {
         RoundedRectangle(cornerRadius: 3)
-            .fill(colorFromHex(hex) ?? .gray)
-            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(.quaternary, lineWidth: 0.5))
+            .fill(colorFromHex(hex) ?? Color.gray)
+            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Color.fill, lineWidth: 0.5))
             .frame(width: size, height: size)
     }
 }
@@ -170,18 +170,19 @@ struct SpecsIndexView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: Spacing.xlg) {
                 banner
                 categoryGrid
-                HStack(alignment: .top, spacing: 16) {
+                HStack(alignment: .top, spacing: Spacing.xlg) {
                     recentCard
                     howCard
                 }
                 statRow
             }
-            .padding(20)
+            .padding(SizeTokens.cardPadding)
         }
         .navigationTitle("设计规范")
+        .background(Color.appBg)
         .sheet(item: $creatingIn) { categoryId in
             SpecEditSheet(categoryId: categoryId.id, spec: nil)
         }
@@ -190,59 +191,52 @@ struct SpecsIndexView: View {
     }
 
     private var guideSheet: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("规范使用指南").font(.headline)
+        VStack(alignment: .leading, spacing: Spacing.lg) {
+            Text("规范使用指南").font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold))
             Text("三步将设计规范接入走查流程，让每一次走查都有据可依。")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 10) {
+                .font(.system(size: FontTokens.Size.bodySmall))
+                .foregroundStyle(Color.textSecondary)
+            VStack(alignment: .leading, spacing: Spacing.lg) {
                 howStep(1, "link", "连接 Figma", "粘贴 Figma 规范链接或上传 .fig 存档，建立规范来源")
-                howStep(2, "square.stack.3d.up.fill", "解析 Token", "自动提取颜色、间距、字号、圆角、阴影等设计属性")
+                howStep(2, "square.stack.3d.upColor.fill", "解析 Token", "自动提取颜色、间距、字号、圆角、阴影等设计属性")
                 howStep(3, "checkmark.shield", "绑定项目自动校验", "项目绑定规范后，走查任务自动加载 Token 基线逐项校验")
             }
             Text("规范 Token 支持导出为 JSON / CSS / Tailwind 格式，可直接投入开发使用。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(10)
+                .font(.system(size: FontTokens.Size.captionSmall))
+                .foregroundStyle(Color.textSecondary)
+                .padding(Spacing.md)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                .background(Color.primarySoft, in: RoundedRectangle(cornerRadius: Radius.sm))
             HStack {
                 Spacer()
-                Button("知道了") { showGuide = false }
-                    .buttonStyle(.borderedProminent)
+                AppButton("知道了", style: .primary) { showGuide = false }
             }
         }
-        .padding(20)
+        .padding(SizeTokens.cardPadding)
         .frame(width: 480, height: 360)
     }
 
     private var banner: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Spacing.mg) {
             Text("让设计规范成为走查的统一标准")
-                .font(.system(size: 24, weight: .bold))
+                .font(.system(size: FontTokens.Size.pageHeader, weight: .bold))
             Text("支持 Figma 规范链接粘贴 / .fig 文件解析，自动提取设计 Token，并可一键同步最新版本，让走查自动校验设计合规性。")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            HStack(spacing: 18) {
-                feat("arrow.triangle.2.circlepath", "规范同步", "Figma 一键解析", .blue)
-                feat("layeredshape.2", "Token 提取", "多端格式导出", .purple)
-                feat("checkmark.circle", "走查校验", "合规自动检测", .green)
+                .font(.system(size: FontTokens.Size.bodySmall))
+                .foregroundStyle(Color.textSecondary)
+            HStack(spacing: Spacing.xlg) {
+                feat("arrow.triangle.2.circlepath", "规范同步", "Figma 一键解析", Color.primary)
+                feat("layeredshape.2", "Token 提取", "多端格式导出", Color.primaryDark)
+                feat("checkmark.circle", "走查校验", "合规自动检测", .success)
             }
             HStack {
                 Spacer()
-                HStack(spacing: 8) {
-                    Button {
+                HStack(spacing: Spacing.md) {
+                    AppButton("规范使用指南", icon: "book", style: .text) {
                         showGuide = true
-                    } label: {
-                        Label("规范使用指南", systemImage: "book")
                     }
-                    Button {
+                    AppButton(checking ? "检查中…" : "检查更新", icon: "arrow.triangle.2.circlepath", style: .text, isDisabled: checking) {
                         Task { await runCheck() }
-                    } label: {
-                        Label(checking ? "检查中…" : "检查更新", systemImage: "arrow.triangle.2.circlepath")
-                            .symbolEffect(.rotate, isActive: checking)
                     }
-                    .disabled(checking)
                     Menu {
                         ForEach(sortedCategories) { c in
                             Button {
@@ -253,26 +247,30 @@ struct SpecsIndexView: View {
                         }
                     } label: {
                         Label("新建规范", systemImage: "plus")
+                            .font(.system(size: FontTokens.Size.bodySmall, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, SizeTokens.buttonPaddingH)
+                            .padding(.vertical, SizeTokens.buttonPaddingV)
+                            .background(Color.primary, in: RoundedRectangle(cornerRadius: Radius.sm))
                     }
-                    .buttonStyle(.borderedProminent)
                 }
             }
         }
-        .padding(20)
+        .padding(Spacing.hero)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.blue.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color.primarySoft, in: RoundedRectangle(cornerRadius: Radius.lg))
     }
 
     private func feat(_ icon: String, _ title: String, _ sub: String, _ color: Color) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Spacing.md) {
             Image(systemName: icon)
-                .font(.system(size: 12))
+                .font(.system(size: FontTokens.Size.captionSmall))
                 .foregroundStyle(color)
                 .frame(width: 24, height: 24)
-                .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: 6))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.caption.weight(.semibold))
-                Text(sub).font(.caption2).foregroundStyle(.secondary)
+                .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: Radius.tiny))
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Text(title).font(.system(size: FontTokens.Size.captionSmall, weight: .semibold))
+                Text(sub).font(.system(size: FontTokens.Size.caption)).foregroundStyle(Color.textSecondary)
             }
         }
     }
@@ -284,7 +282,7 @@ struct SpecsIndexView: View {
     // MARK: 端分类卡
 
     private var categoryGrid: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 12)], spacing: 12) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: Spacing.lg)], spacing: Spacing.lg) {
             ForEach(sortedCategories) { c in
                 NavigationLink(value: c.id) { categoryCard(c) }
                     .buttonStyle(.plain)
@@ -304,34 +302,35 @@ struct SpecsIndexView: View {
             ? ("待创建", false)
             : (okCount == specs.count ? "同步正常" : okCount > 0 ? "部分同步" : "未同步", okCount == specs.count)
         let applied = bindings.contains { b in specs.contains { $0.id == b.specId } }
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: Spacing.md) {
             HStack {
                 SpecPlatformIcon(platform: c.platformKey, size: 18)
                 if applied { SpecPill(text: "已应用", tone: .ok) }
                 Spacer()
             }
-            Text(catName(c)).font(.headline).foregroundStyle(.primary)
+            Text(catName(c)).font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold)).foregroundStyle(Color.text)
             Text(c.isBuiltin ? builtinCatDesc(c.platformKey) : "团队自定义端分类，沉淀该端专属的设计规范与 Token 基线。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.system(size: FontTokens.Size.captionSmall))
+                .foregroundStyle(Color.textSecondary)
                 .lineLimit(2)
-            HStack(spacing: 10) {
+            HStack(spacing: Spacing.mg) {
                 Label("\(specs.count) 套规范", systemImage: "square.stack.3d.up")
                 Text("·")
                 Label("\(tokenCount) 个 Token", systemImage: "square.grid.2x2")
             }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
+            .font(.system(size: FontTokens.Size.caption))
+            .foregroundStyle(Color.textSecondary)
             HStack {
                 SyncStateDot(label: state.text, ok: state.ok)
                 Spacer()
-                Text("›").foregroundStyle(.tertiary)
+                Text("›").foregroundStyle(Color.textTertiary)
             }
         }
-        .padding(14)
+        .padding(SizeTokens.cardPaddingCompact + 4)
         .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
+        .background(Color.cardBg, in: RoundedRectangle(cornerRadius: Radius.lg))
+        .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(Color.border, lineWidth: 1))
+        .shadow(color: Shadow.card.color, radius: Shadow.card.radius, x: Shadow.card.x, y: Shadow.card.y)
     }
 
     // MARK: 最近使用 + 指引
@@ -356,13 +355,13 @@ struct SpecsIndexView: View {
     }
 
     private var recentCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Spacing.mg) {
             Label("最近使用的规范", systemImage: "clock")
-                .font(.subheadline.weight(.semibold))
+                .font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold))
             if recentRows.isEmpty {
                 Text("暂无规范，点击右上角「新建规范」开始")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: FontTokens.Size.captionSmall))
+                    .foregroundStyle(Color.textSecondary)
                     .frame(maxWidth: .infinity, minHeight: 60)
             } else {
                 VStack(spacing: 0) {
@@ -374,9 +373,9 @@ struct SpecsIndexView: View {
                         Text("状态").frame(width: 70, alignment: .leading)
                         Text("操作").frame(width: 40, alignment: .trailing)
                     }
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 4)
+                    .font(.system(size: FontTokens.Size.captionSmall, weight: .medium))
+                    .foregroundStyle(Color.textSecondary)
+                    .padding(.bottom, Spacing.xs)
                     ForEach(recentRows, id: \.spec.id) { row in
                         NavigationLink(value: SpecSpecRoute(specId: row.spec.id)) {
                             HStack {
@@ -396,9 +395,9 @@ struct SpecsIndexView: View {
                                 .frame(width: 70, alignment: .leading)
                                 Text("查看").frame(width: 40, alignment: .trailing)
                             }
-                            .font(.caption)
-                            .foregroundStyle(.primary)
-                            .padding(.vertical, 5)
+                            .font(.system(size: FontTokens.Size.captionSmall))
+                            .foregroundStyle(Color.text)
+                            .padding(.vertical, Spacing.xs)
                         }
                         .buttonStyle(.plain)
                         Divider()
@@ -406,34 +405,34 @@ struct SpecsIndexView: View {
                 }
             }
         }
-        .padding(14)
+        .padding(SizeTokens.cardPaddingCompact + 4)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
+        .background(Color.cardBg, in: RoundedRectangle(cornerRadius: Radius.lg))
+        .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(Color.border, lineWidth: 1))
     }
 
     private var howCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("规范如何融入走查").font(.subheadline.weight(.semibold))
+        VStack(alignment: .leading, spacing: Spacing.mg) {
+            Text("规范如何融入走查").font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold))
             howStep(1, "link", "连接 Figma", "粘贴 Figma 规范链接或上传 .fig 存档，建立规范来源")
-            howStep(2, "square.stack.3d.up.fill", "解析 Token", "自动提取颜色、间距、字号、圆角、阴影等设计属性")
+            howStep(2, "square.stack.3d.upColor.fill", "解析 Token", "自动提取颜色、间距、字号、圆角、阴影等设计属性")
             howStep(3, "checkmark.shield", "绑定项目自动校验", "项目绑定规范后，走查任务自动加载 Token 基线逐项校验")
         }
-        .padding(14)
+        .padding(SizeTokens.cardPaddingCompact + 4)
         .frame(width: 280, alignment: .topLeading)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
+        .background(Color.cardBg, in: RoundedRectangle(cornerRadius: Radius.lg))
+        .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(Color.border, lineWidth: 1))
     }
 
     private func howStep(_ no: Int, _ icon: String, _ title: String, _ desc: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: Spacing.md) {
             Text("\(no)")
-                .font(.caption2.weight(.bold))
+                .font(.system(size: FontTokens.Size.captionSmall, weight: .bold))
                 .frame(width: 16, height: 16)
-                .background(.tint.opacity(0.14), in: Circle())
-            VStack(alignment: .leading, spacing: 2) {
-                Label(title, systemImage: icon).font(.caption.weight(.semibold))
-                Text(desc).font(.caption2).foregroundStyle(.secondary)
+                .background(Color.primary.opacity(0.14), in: Circle())
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Label(title, systemImage: icon).font(.system(size: FontTokens.Size.captionSmall, weight: .semibold))
+                Text(desc).font(.system(size: FontTokens.Size.caption)).foregroundStyle(Color.textSecondary)
             }
         }
     }
@@ -444,7 +443,7 @@ struct SpecsIndexView: View {
         let tokens = specsAll.reduce(0) { $0 + (latestBySpec[$1.id]?.tokenCount ?? 0) }
         let bound = Set(bindings.map(\.projectId)).count
         let connected = specsAll.filter { $0.figmaFileKey != nil }.count
-        return HStack(spacing: 12) {
+        return HStack(spacing: Spacing.lg) {
             statCard("layeredshape.2", String(format: "%02d", specsAll.count), "已管理规范")
             statCard("number.square", "\(tokens)", "已解析 Token")
             statCard("link", String(format: "%02d", bound), "已绑定项目")
@@ -453,21 +452,21 @@ struct SpecsIndexView: View {
     }
 
     private func statCard(_ icon: String, _ value: String, _ label: String) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Spacing.mg) {
             Image(systemName: icon)
-                .font(.system(size: 15))
-                .foregroundStyle(.tint)
+                .font(.system(size: FontTokens.Size.sectionHeader))
+                .foregroundStyle(Color.primary)
                 .frame(width: 30, height: 30)
-                .background(.tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(value).font(.headline)
-                Text(label).font(.caption2).foregroundStyle(.secondary)
+                .background(Color.primary.opacity(0.1), in: RoundedRectangle(cornerRadius: Radius.sm))
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Text(value).font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold))
+                Text(label).font(.system(size: FontTokens.Size.captionSmall)).foregroundStyle(Color.textSecondary)
             }
         }
-        .padding(12)
+        .padding(Spacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
+        .background(Color.cardBg, in: RoundedRectangle(cornerRadius: Radius.lg))
+        .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(Color.border, lineWidth: 1))
     }
 
     // MARK: 检查更新（逐套规范轻量比对 Figma last_modified）
@@ -526,20 +525,20 @@ struct SpecsIndexView: View {
     }
 
     private func checkSheet(_ state: SpecCheckState) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("规范版本检查").font(.headline)
+        VStack(alignment: .leading, spacing: Spacing.lg) {
+            Text("规范版本检查").font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold))
             switch state {
             case .noPat:
-                Text("未配置 Figma Token，请先在「MCP 服务」中配置 Figma PAT").font(.callout)
+                Text("未配置 Figma Token，请先在「MCP 服务」中配置 Figma PAT").font(.system(size: FontTokens.Size.bodySmall))
             case .failed(let msg):
-                Text("检查失败：\(msg)").font(.callout).foregroundStyle(.red)
+                Text("检查失败：\(msg)").font(.system(size: FontTokens.Size.bodySmall)).foregroundStyle(Color.danger)
             case .done(let rows):
                 if rows.isEmpty {
-                    Text("暂无已关联 Figma 文件的设计规范").font(.callout)
+                    Text("暂无已关联 Figma 文件的设计规范").font(.system(size: FontTokens.Size.bodySmall))
                 } else {
                     let outdated = rows.filter { $0.status == .update }.count
                     Text(outdated > 0 ? "\(outdated) 套规范有更新" : "全部 \(rows.count) 套规范均为最新版本")
-                        .font(.callout.weight(.medium))
+                        .font(.system(size: FontTokens.Size.bodySmall, weight: .medium))
                     ScrollView {
                         VStack(spacing: 0) {
                             HStack {
@@ -549,7 +548,7 @@ struct SpecsIndexView: View {
                                 Text("本地同步").frame(width: 90, alignment: .leading)
                                 Text("Figma 更新").frame(width: 90, alignment: .leading)
                             }
-                            .font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+                            .font(.system(size: FontTokens.Size.captionSmall, weight: .medium)).foregroundStyle(Color.textSecondary)
                             ForEach(rows) { row in
                                 SpecCheckRowView(row: row)
                             }
@@ -560,10 +559,10 @@ struct SpecsIndexView: View {
             }
             HStack {
                 Spacer()
-                Button("知道了") { checkResult = nil }.buttonStyle(.borderedProminent)
+                AppButton("知道了", style: .primary) { checkResult = nil }
             }
         }
-        .padding(20)
+        .padding(SizeTokens.cardPadding)
         .frame(width: 560, height: 380)
     }
 }
@@ -621,8 +620,8 @@ private struct SpecCheckRowView: View {
             Text(row.localTs > 0 ? fmtShortTime(row.localTs) : "—").frame(width: 90, alignment: .leading)
             Text(row.remoteTs > 0 ? fmtShortTime(row.remoteTs) : "—").frame(width: 90, alignment: .leading)
         }
-        .font(.caption)
-        .padding(.vertical, 4)
+        .font(.system(size: FontTokens.Size.captionSmall))
+        .padding(.vertical, Spacing.xs)
     }
 }
 
@@ -681,7 +680,7 @@ struct SpecCategoryListView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: Spacing.xlg) {
                 if self.category != nil {
                     header
                 }
@@ -691,14 +690,13 @@ struct SpecCategoryListView: View {
                     grid
                 }
             }
-            .padding(20)
+            .padding(SizeTokens.cardPadding)
         }
         .navigationTitle(category.map { $0.isBuiltin ? catName($0) : $0.name } ?? "设计规范")
+        .background(Color.appBg)
         .toolbar {
-            Button {
+            AppButton("新建规范", icon: "plus", style: .primary) {
                 creating = true
-            } label: {
-                Label("新建规范", systemImage: "plus")
             }
         }
         .sheet(isPresented: $creating) {
@@ -707,33 +705,32 @@ struct SpecCategoryListView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            HStack(spacing: Spacing.md) {
                 SpecPlatformIcon(platform: category?.platformKey ?? .pc, size: 18)
                 Text(category.map { $0.isBuiltin ? catName($0) : $0.name } ?? "")
-                    .font(.system(size: 22, weight: .bold))
+                    .font(.system(size: FontTokens.Size.pageHeader, weight: .bold))
             }
             Text(category.map { $0.isBuiltin ? builtinDesc($0.platformKey) : "团队自定义端分类，沉淀该端专属的设计规范与 Token 基线。" } ?? "")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.system(size: FontTokens.Size.bodySmall))
+                .foregroundStyle(Color.textSecondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(.blue.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+        .padding(Spacing.hero)
+        .background(Color.primarySoft, in: RoundedRectangle(cornerRadius: Radius.lg))
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Text("该端还没有规范").font(.headline)
+        VStack(spacing: Spacing.md) {
+            Text("该端还没有规范").font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold))
             Text("创建规范并连接 Figma，即可同步 Token 作为走查基线")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Button("新建规范") { creating = true }
-                .buttonStyle(.borderedProminent)
+                .font(.system(size: FontTokens.Size.captionSmall))
+                .foregroundStyle(Color.textSecondary)
+            AppButton("新建规范", style: .primary) { creating = true }
         }
         .frame(maxWidth: .infinity, minHeight: 180)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
+        .background(Color.cardBg, in: RoundedRectangle(cornerRadius: Radius.lg))
+        .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(Color.border, lineWidth: 1))
     }
 
     private var sortedSpecs: [DesignSpec] {
@@ -741,7 +738,7 @@ struct SpecCategoryListView: View {
     }
 
     private var grid: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 12)], spacing: 12) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: Spacing.lg)], spacing: Spacing.lg) {
             ForEach(sortedSpecs) { s in
                 NavigationLink(value: SpecSpecRoute(specId: s.id)) { card(s) }
                     .buttonStyle(.plain)
@@ -753,32 +750,32 @@ struct SpecCategoryListView: View {
         let latest = versionsAll.filter { $0.specId == s.id }.max { $0.no < $1.no }
         let verCount = versionsAll.filter { $0.specId == s.id }.count
         let connected = s.figmaFileKey != nil && max(latest?.syncedAt ?? 0, s.lastSyncedAt ?? 0) > 0
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: Spacing.md) {
             HStack {
-                Image(systemName: "square.stack.3d.up.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(.tint)
+                Image(systemName: "square.stack.3d.upColor.fill")
+                    .font(.system(size: FontTokens.Size.bodySmall))
+                    .foregroundStyle(Color.primary)
                 if let latest { SpecPill(text: "V\(latest.no)") }
                 Spacer()
             }
-            Text(s.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
+            Text(s.name).font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold)).foregroundStyle(Color.text).lineLimit(1)
             Text(s.figFileName ?? "未关联 Figma 文件")
-                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            HStack(spacing: 10) {
+                .font(.system(size: FontTokens.Size.captionSmall)).foregroundStyle(Color.textSecondary).lineLimit(1)
+            HStack(spacing: Spacing.mg) {
                 Label("\(verCount) 个版本", systemImage: "clock")
                 Text("·")
                 Label("\(latest?.tokenCount ?? 0) 个 Token", systemImage: "number.square")
             }
-            .font(.caption2).foregroundStyle(.secondary)
+            .font(.system(size: FontTokens.Size.caption)).foregroundStyle(Color.textSecondary)
             HStack {
                 SyncStateDot(label: connected ? "同步正常" : "未同步", ok: connected)
                 Spacer()
-                Text("›").foregroundStyle(.tertiary)
+                Text("›").foregroundStyle(Color.textTertiary)
             }
         }
-        .padding(14)
+        .padding(SizeTokens.cardPaddingCompact + 4)
         .frame(maxWidth: .infinity, minHeight: 140, alignment: .topLeading)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
+        .background(Color.cardBg, in: RoundedRectangle(cornerRadius: Radius.lg))
+        .overlay(RoundedRectangle(cornerRadius: Radius.lg).strokeBorder(Color.border, lineWidth: 1))
     }
 }

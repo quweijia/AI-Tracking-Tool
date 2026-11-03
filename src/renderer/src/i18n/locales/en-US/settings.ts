@@ -55,6 +55,8 @@ export default {
   langDesc: 'Interface text switches immediately, no app restart required',
   soundLabel: 'Task Completion Sound',
   soundDesc: 'Play a chime when an AI recognition task finishes. Turn off to mute.',
+  specMenuLabel: 'Design Specs Feature',
+  specMenuDesc: 'When off, hides the Design Specs entry in the sidebar',
   // AI Assistant
   assistantTitle: 'AI Assistant',
   assistantDesc: 'Control the AI assistant visibility and floating button style, and pick a dedicated AI model for it. Changes apply immediately.',
@@ -84,6 +86,29 @@ export default {
   tol_border_hint: 'Allowed deviation for border width (px)',
   tol_color: 'Color ΔE',
   tol_color_hint: 'CIEDE2000 color-difference threshold; below 2 is hard to tell apart by eye',
+  // Layered restoration scoring (incremental bypass, off by default; independent of the global tolerance above)
+  layeredTitle: 'Layered restoration scoring',
+  layeredDesc:
+    'Classifies deviations at module / element level as "absorbed" or "reported" and computes an overall restoration score. Independent of the global tolerance above; changes apply immediately.',
+  layered_toggle: 'Enable layered restoration scoring',
+  layered_on: 'Turn on layered restoration scoring',
+  layered_off: 'Turn off layered restoration scoring',
+  layered_tol_module_pos: 'Module position tolerance',
+  layered_tol_module_pos_hint: 'Allowed center-point offset for module (container) blocks (px)',
+  layered_tol_module_size: 'Module size tolerance',
+  layered_tol_module_size_hint: 'Allowed width/height deviation for module blocks (px)',
+  layered_tol_element_pos: 'Element position tolerance',
+  layered_tol_element_pos_hint: 'Allowed center-point offset for controls and text (px)',
+  layered_tol_element_size: 'Element size tolerance',
+  layered_tol_element_size_hint: 'Allowed width/height deviation for controls and text (px)',
+  layered_w_module: 'Module deduction weight',
+  layered_w_module_hint: 'Deduction weight for reported module-level deviations (0–1)',
+  layered_w_element: 'Element deduction weight',
+  layered_w_element_hint: 'Deduction weight for reported element-level deviations (0–1)',
+  layered_w_position: 'Position deduction weight',
+  layered_w_position_hint: 'Share of the position dimension in deductions (0–1)',
+  layered_w_size: 'Size deduction weight',
+  layered_w_size_hint: 'Share of the size dimension in deductions (0–1)',
   // MCP modal
   editMcp: 'Edit MCP Service',
   addMcp: 'Add MCP Service',
@@ -165,7 +190,7 @@ export default {
   // About
   aboutAlt: 'AI Walkthrough Tool',
   appName: 'AI Walkthrough Tool',
-  aboutDesc: 'A UI design walkthrough tool: compare designs with dev screenshots, annotate, recheck, and export reports. All data stays on this machine.',
+  aboutDesc: 'Compare designs with dev screenshots in multiple modes, let AI spot candidate diffs and draft annotations, then verify fixes and export walkthrough reports in one click. All data stays on this machine.',
   author: 'Author',
   techStack: 'Tech Stack'
 }

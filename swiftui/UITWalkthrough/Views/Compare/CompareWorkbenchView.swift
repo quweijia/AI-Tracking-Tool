@@ -3,13 +3,14 @@ import SwiftUI
 
 /// 工作台模式：手动标注（双图对比）/ 自动走查（Figma 结构化比对）
 /// （对齐 CompareWorkbench.tsx `WorkMode`；自动走查面板见 Walk/AutoWalkPanelView）
-enum WorkbenchWorkMode: String, CaseIterable, Identifiable {
+enum WorkbenchWorkMode: String, CaseIterable, Identifiable, CustomStringConvertible {
     case manual
     case auto
 
     var id: String { rawValue }
 
     var label: String { self == .manual ? "手动标注" : "自动走查" }
+    var description: String { label }
 }
 
 /// 对比工作台：顶栏（返回/页面信息/问题清单）+ 聚焦条 + 画布工具条 + 三栏主体 + 底部工具栏
@@ -113,7 +114,7 @@ struct CompareWorkbenchView: View {
             // 聚焦条：手动/自动两种模式共用（自动走查抽屉点卡片同样进入聚焦）
             focusBar
             toolbar
-            Divider()
+            AppDivider()
             if workMode == .manual {
                 HStack(spacing: 0) {
                     VStack(spacing: 0) {
@@ -123,7 +124,7 @@ struct CompareWorkbenchView: View {
                         }
                     }
                     if drawerOpen {
-                        Divider()
+                        AppDivider()
                         IssueDrawerPanel(
                             issues: modeIssues,
                             onHighlight: handleFlash,
@@ -149,7 +150,7 @@ struct CompareWorkbenchView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                     if drawerOpen {
-                        Divider()
+                        AppDivider()
                         IssueDrawerPanel(
                             issues: modeIssues,
                             onHighlight: handleFlash,
@@ -163,7 +164,7 @@ struct CompareWorkbenchView: View {
                 }
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(Color.appBg)
         .background { undoRedoShortcuts }
         .sheet(isPresented: $editPageOpen) {
             if let page {
@@ -208,49 +209,49 @@ struct CompareWorkbenchView: View {
     // MARK: - 顶栏（对齐 hero：返回项目 + 页面标题 + 平台徽标 + Figma 链接 + 问题清单 + 编辑信息）
 
     private var headerBar: some View {
-        HStack(spacing: 10) {
-            Button {
+        HStack(spacing: Spacing.md) {
+            AppIconButton("chevron.left") {
                 appState.closePage()
-            } label: {
-                Label("返回项目", systemImage: "chevron.left")
             }
-            .controlSize(.small)
 
             if let page {
-                Divider().frame(height: 16)
+                AppDivider().frame(height: Spacing.xlg2)
                 Text(page.pageName)
-                    .font(.headline)
+                    .font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold))
+                    .foregroundStyle(Color.text)
                     .lineLimit(1)
                 PlatformBadgeView(platform: page.platform)
                 if let url = page.figmaUrl, !url.isEmpty, let dest = URL(string: url) {
                     Link(destination: dest) {
                         Label("Figma 设计稿", systemImage: "link")
                             .labelStyle(.titleAndIcon)
+                            .font(.system(size: FontTokens.Size.bodySmall))
+                            .foregroundStyle(Color.textSecondary)
                     }
-                    .controlSize(.small)
                     .help(url)
                 }
             }
             Spacer()
             if page != nil {
-                Button {
+                AppIconButton("list.bullet") {
                     drawerOpen.toggle()
-                } label: {
-                    Label("问题清单", systemImage: "list.bullet")
                 }
-                .controlSize(.small)
-                Button("编辑页面信息") { editPageOpen = true }
-                    .controlSize(.small)
-                Button {
+                AppButton("编辑页面信息", style: .text) { editPageOpen = true }
+                AppIconButton("square.and.arrow.up") {
                     if let page { appState.openReportExport(page: page) }
-                } label: {
-                    Label("导出报告", systemImage: "square.and.arrow.up")
                 }
-                .controlSize(.small)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, Spacing.xlg)
+        .frame(height: SizeTokens.topbarHeight)
+        .background(Color.cardBg)
+        .overlay(
+            Rectangle()
+                .fill(Color.border)
+                .frame(height: 1)
+                .offset(y: SizeTokens.topbarHeight / 2),
+            alignment: .bottom
+        )
     }
 
     // MARK: - 聚焦条（对齐 aw-focus-bar：正在聚焦查看 + 退出聚焦）
@@ -259,101 +260,99 @@ struct CompareWorkbenchView: View {
     private var focusBar: some View {
         if let focused = focusIssue {
             let desc = focused.issueDescription
-            HStack(spacing: 8) {
+            HStack(spacing: Spacing.md) {
                 Image(systemName: "scope")
+                    .font(.system(size: FontTokens.Size.bodySmall))
                 Text("正在聚焦查看：\(desc.count > 32 ? String(desc.prefix(32)) + "…" : desc)")
+                    .font(.system(size: FontTokens.Size.captionSmall))
+                    .foregroundStyle(Color.primary)
                     .lineLimit(1)
                 Spacer()
-                Button("退出聚焦") { focusIssue = nil }
-                    .controlSize(.small)
+                AppButton("退出聚焦", style: .text) { focusIssue = nil }
             }
-            .font(.callout)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color.accentColor.opacity(0.08))
+            .padding(.horizontal, Spacing.xlg)
+            .padding(.vertical, Spacing.md)
+            .background(Color.primarySoft)
         }
     }
 
     // MARK: - 画布工具条（对齐 workbench-header：同步滚动 / 分割线 / 缩放 / 视图模式 / 工作模式）
 
     private var toolbar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: Spacing.xlg2) {
             if workMode == .manual {
                 if !canvasModel.mode.isOverlay {
                     Toggle("同步滚动", isOn: $canvasModel.syncScroll)
+                        .font(.system(size: FontTokens.Size.bodySmall))
                 }
                 if canvasModel.mode == .slider {
-                    HStack(spacing: 6) {
+                    HStack(spacing: Spacing.sm) {
                         Text("分割线")
+                            .font(.system(size: FontTokens.Size.bodySmall))
+                            .foregroundStyle(Color.text)
                         Slider(value: $canvasModel.sliderPos, in: 0...100)
                             .frame(width: 140)
                     }
                     Toggle("显示分界线", isOn: $canvasModel.showDivider)
+                        .font(.system(size: FontTokens.Size.bodySmall))
                 }
-                HStack(spacing: 6) {
+                HStack(spacing: Spacing.sm) {
                     Text("缩放")
+                        .font(.system(size: FontTokens.Size.bodySmall))
+                        .foregroundStyle(Color.text)
                     Slider(value: $canvasModel.zoom, in: 0.25...3, step: 0.05)
                         .frame(width: 120)
                     Text("\(Int((canvasModel.zoom * 100).rounded()))%")
+                        .font(.system(size: FontTokens.Size.bodySmall))
+                        .foregroundStyle(Color.textSecondary)
                         .monospacedDigit()
                         .frame(width: 44, alignment: .leading)
                 }
-                Picker("视图模式", selection: $canvasModel.mode) {
-                    ForEach(CanvasViewMode.allCases) { m in
-                        Text(m.label).tag(m)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                AppSegmented(options: CanvasViewMode.allCases, selection: $canvasModel.mode)
             }
             Spacer()
-            Picker("工作模式", selection: $workMode) {
-                ForEach(WorkbenchWorkMode.allCases) { m in
-                    Text(m.label).tag(m)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .help("切换手动标注与自动走查模式")
+            AppSegmented(options: WorkbenchWorkMode.allCases, selection: $workMode)
+                .help("切换手动标注与自动走查模式")
         }
-        .controlSize(.small)
-        .padding(.horizontal, 12)
-        .padding(.bottom, 8)
+        .font(.system(size: FontTokens.Size.bodySmall))
+        .foregroundStyle(Color.text)
+        .padding(.horizontal, Spacing.xlg)
+        .padding(.vertical, Spacing.md)
     }
 
     // MARK: - 底部工具栏（对齐 anno-toolbar：抓手/点位/箭头/框选/文字/测量/吸色 + 工具提示）
 
     private var toolRail: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Spacing.md) {
             ForEach(AnnotationTool.railOrder, id: \.self) { t in
                 Button {
                     tool = t
                 } label: {
-                    VStack(spacing: 3) {
+                    VStack(spacing: Spacing.xs) {
                         Image(systemName: t.systemImage)
-                            .font(.system(size: 15))
+                            .font(.system(size: FontTokens.Size.bodySmall))
                         Text(t.label)
-                            .font(.system(size: 11))
+                            .font(.system(size: FontTokens.Size.captionSmall))
                     }
                     .frame(width: 56, height: 44)
                     .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(tool == t ? Color.accentColor.opacity(0.14) : Color.clear)
+                        RoundedRectangle(cornerRadius: Radius.sm)
+                            .fill(tool == t ? Color.primarySoft : Color.clear)
                     )
-                    .foregroundStyle(tool == t ? Color.accentColor : Color.primary)
+                    .foregroundStyle(tool == t ? Color.primary : Color.textSecondary)
                 }
                 .buttonStyle(.plain)
                 .help(t.hint)
             }
             Spacer()
             Text(tool.hint + "；按住已有标注可拖动移动位置，松开后弹出详情")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .font(.system(size: FontTokens.Size.caption))
+                .foregroundStyle(Color.textTertiary)
                 .lineLimit(2)
                 .frame(maxWidth: 340, alignment: .leading)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, Spacing.xlg)
+        .padding(.vertical, Spacing.md)
     }
 
     /// 隐藏快捷键承载（⌘Z 撤销 / ⇧⌘Z 重做，对齐 Electron keydown 监听）
@@ -427,10 +426,10 @@ struct CompareWorkbenchView: View {
     /// 叠加模式底部提示（对齐 annotation-hint）
     private var overlayHint: some View {
         Text("叠加 / 滑块 / 闪烁模式下标注显示在开发截图图层上，可直接标注")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .font(.system(size: FontTokens.Size.captionSmall))
+            .foregroundStyle(Color.textSecondary)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
+            .padding(.vertical, Spacing.md)
     }
 
     // MARK: - 标注动作

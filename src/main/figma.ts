@@ -555,6 +555,21 @@ export async function fetchFigmaDesign(input: {
   }
 }
 
+/** 给单个网络调用加整体超时：proxyFetch 代理探测链最坏耗时数分钟，避免 UI 长时间无响应 */
+async function withNetworkTimeout<T>(p: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      p,
+      new Promise<never>((_, rej) => {
+        timer = setTimeout(() => rej(new Error(timeoutMessage)), ms)
+      })
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 /**
  * 轻量读取 Frame 尺寸（自动走查视口宽度自动匹配用）：只拉节点树解析 bbox，不渲染截图。
  * 链接取页面层级时与 fetchFigmaDesign 一致地下钻到第一个可见 Frame。
@@ -569,9 +584,14 @@ export async function fetchFigmaNodeSize(input: {
   if (!parsed) return { ok: false, message: 'Figma 链接无法识别：请在 Figma 选中目标 Frame 后右键 Copy link' }
   if (!parsed.nodeId) return { ok: false, message: 'Figma 链接缺少 node-id：请重新 Copy link' }
   try {
-    const j = await figmaApi<{ nodes?: Record<string, { document?: FigmaNode }> }>(
-      `/files/${parsed.fileKey}/nodes?ids=${encodeURIComponent(parsed.nodeId)}`,
-      pat
+    // 整体 30 秒超时兜底：代理探测链全失败最坏要数分钟，超时直接报错让 UI 不再卡在「正在读取」
+    const j = await withNetworkTimeout(
+      figmaApi<{ nodes?: Record<string, { document?: FigmaNode }> }>(
+        `/files/${parsed.fileKey}/nodes?ids=${encodeURIComponent(parsed.nodeId)}`,
+        pat
+      ),
+      30000,
+      '读取画板尺寸超时（30 秒）：Figma API 网络未连通。若浏览器能打开 Figma 而应用不行，请在「设置 → MCP 管理」编辑 Figma 服务，填写可用代理地址（如 http://127.0.0.1:7890 或公司内网代理）后重试'
     )
     const entry = j.nodes?.[parsed.nodeId] ?? Object.values(j.nodes ?? {})[0]
     let doc = entry?.document

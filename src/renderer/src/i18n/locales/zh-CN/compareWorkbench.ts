@@ -45,6 +45,13 @@ export default {
   aiOverwriteConfirm: '将覆盖当前 {{n}} 条未审核的 AI 候选，重新识别吗？',
   aiDoneWithCount: 'AI 识别完成：{{n}} 条候选，请在问题清单中逐条审核',
   aiDoneNoDiff: 'AI 识别完成：未发现明显差异',
+  close: '关闭',
+  /** 识别进行中再次点击的确认弹窗 */
+  aiRunningDialogTitle: 'AI 识别进行中',
+  aiRunningDialogDesc: '当前页面已有识别任务正在进行，可以继续等待结果、中断当前任务，或中断后重新开始一次新的识别。',
+  aiRunningContinue: '继续',
+  aiRunningInterrupt: '中断',
+  aiRunningRestart: '重新开始',
   /** 聚焦与工作台工具区 */
   focusingOn: '正在聚焦查看：{{desc}}',
   exitFocus: '退出聚焦',

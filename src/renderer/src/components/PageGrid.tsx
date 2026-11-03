@@ -9,6 +9,13 @@ import { PlatformIcon } from './PlatformBadge'
 import FolderCard from './FolderCard'
 import { timeAgo } from './ProjectCard'
 
+/** 1×1 透明图：网格拖拽时用 setDragImage 隐藏浏览器默认的链接拖影气泡（与侧边栏同款方案） */
+const TRANSPARENT_DRAG_IMG = (() => {
+  const img = new Image(1, 1)
+  img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+  return img
+})()
+
 /** 页面卡片顶部的设计稿缩略图 */
 export function PageThumb({ path }: { path?: string }) {
   const { t } = useTranslation('pageGrid')
@@ -214,6 +221,7 @@ export default function PageGrid({
       onDragStart: (e: DragEvent<HTMLDivElement>) => {
         setDrag({ kind: 'folder', id: f.id })
         e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setDragImage(TRANSPARENT_DRAG_IMG, 0, 0)
         e.dataTransfer.setData('text/plain', f.id)
       },
       onDragEnd: () => {
@@ -265,6 +273,7 @@ export default function PageGrid({
       onDragStart: (e: DragEvent<HTMLAnchorElement>) => {
         setDrag({ kind: 'page', id: pg.id })
         e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setDragImage(TRANSPARENT_DRAG_IMG, 0, 0)
         e.dataTransfer.setData('text/plain', pg.id)
       },
       onDragEnd: () => {
@@ -376,7 +385,7 @@ export default function PageGrid({
           </Link>
         ))}
         {!batchMode && (
-          <Link to={addLink} className="page-card add-page">
+          <Link to={addLink} className="page-card add-page" draggable={false}>
             {pages.length === 0 && folders.length === 0 ? t('addPage') : t('addMore')}
           </Link>
         )}

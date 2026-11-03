@@ -1,9 +1,12 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { db, genId, Platform, PLATFORM_LABELS, Folder } from '../db'
+import { db, genId, bySort, Platform, PLATFORM_LABELS, Folder } from '../db'
 import USelect from '../components/USelect'
+import UTreeSelect, { type UTreeNode } from '../components/UTreeSelect'
+import { SpecPlatIcon } from '../components/Layout'
+import { FolderIconGlyph } from '../components/FolderIcon'
 
 interface PickedImage {
   relativePath: string
@@ -56,6 +59,32 @@ export default function NewWalkthrough() {
     setFolderId(routeProjectId ? initialFolderId : '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveProjectId])
+
+  /** 文件夹树形选项：同层按 bySort 排序、按 parentId 递归组树，首项为「未分组」 */
+  const folderTree = useMemo<UTreeNode[]>(() => {
+    const sorted = [...(folders ?? [])].sort(bySort)
+    const build = (parentId?: string): UTreeNode[] =>
+      sorted
+        .filter((f) => (f.parentId ?? undefined) === parentId)
+        .map((f) => {
+          const children = build(f.id)
+          return {
+            value: f.id,
+            label: f.name,
+            icon: (
+              <span style={{ color: f.color ?? 'var(--text-3)' }}>
+                <FolderIconGlyph icon={f.icon} size={14} />
+              </span>
+            ),
+            children: children.length ? children : undefined
+          }
+        })
+    return [{ value: '', label: t('ungroupedOption') }, ...build(undefined)]
+  }, [folders, t])
+
+  /** 按钮回显沿用层级全路径文案（如「设计规范 / AI 赋能」） */
+  const selectedFolder = (folders ?? []).find((f) => f.id === folderId)
+  const folderDisplay = selectedFolder ? folderLabel(selectedFolder, folders ?? []) : undefined
 
   const pickImage = async (target: 'design' | 'screenshot') => {
     const result = await window.electronAPI.selectImage()
@@ -136,21 +165,19 @@ export default function NewWalkthrough() {
               placeholder={t('selectProjectFirst')}
               options={[
                 { value: '', label: t('selectProjectFirst') },
-                ...(projects ?? []).map((p) => ({ value: p.id, label: p.name }))
+                ...[...(projects ?? [])].sort(bySort).map((p) => ({ value: p.id, label: p.name }))
               ]}
             />
           </>
         )}
 
         <label className="field-label">{t('folderLabel')}</label>
-        <USelect
+        <UTreeSelect
           value={folderId}
           onChange={setFolderId}
           placeholder={effectiveProjectId ? t('ungrouped') : t('selectProjectFirst')}
-          options={[
-            { value: '', label: t('ungroupedOption') },
-            ...(folders ?? []).map((v) => ({ value: v.id, label: folderLabel(v, folders ?? []) }))
-          ]}
+          displayLabel={folderDisplay}
+          nodes={folderTree}
         />
 
         <label className="field-label">{t('pageNameLabel')}</label>
@@ -182,6 +209,7 @@ export default function NewWalkthrough() {
               className={`segment-item${platform === k ? ' active' : ''}`}
               onClick={() => setPlatform(k)}
             >
+              <SpecPlatIcon platformKey={k} />
               {t(`platform_${k}`)}
             </button>
           ))}

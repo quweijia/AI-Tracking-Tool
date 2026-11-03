@@ -69,7 +69,12 @@ export default function USelect({ value, onChange, options, className, disabled,
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
     }
-    const close = () => setOpen(false)
+    // 滚动关闭弹层时排除弹层自身：弹层内滚轮滚动（弹层滚动条）不关闭，仅页面滚动才关闭
+    const close = (e: Event) => {
+      const t = e.target as Node | null
+      if (t && popRef.current?.contains(t)) return
+      setOpen(false)
+    }
     document.addEventListener('mousedown', onDocDown)
     document.addEventListener('keydown', onKey)
     window.addEventListener('scroll', close, true)

@@ -9,7 +9,14 @@ import { useSettingsStore } from '../stores/settings'
 import { useAppIconStore, APP_ICONS, type AppIconKey } from '../stores/appIcon'
 import USelect from '../components/USelect'
 import { changeAppLang, type AppLang } from '../i18n'
-import { DEFAULT_TOLERANCE, type ToleranceConfig } from '../../../shared/types'
+import {
+  DEFAULT_LAYERED_TOLERANCE,
+  DEFAULT_TOLERANCE,
+  LAYERED_TOLERANCE_KEY,
+  normalizeLayeredTolerance,
+  type LayeredToleranceConfig,
+  type ToleranceConfig
+} from '../../../shared/types'
 
 /** OpenAI 兼容模型配置 */
 interface AIModel {
@@ -455,9 +462,14 @@ function GeneralSection() {
   const [lang, setLang] = useState(() => localStorage.getItem('app-lang') ?? 'zh-CN')
   // 任务完成音效开关（默认开启，持久化到 electron config）
   const [soundOn, setSoundOn] = useState(true)
+  // 设计规范菜单开关（默认开启，关闭后侧边栏隐藏「设计规范」入口）
+  const [specMenuOn, setSpecMenuOn] = useState(true)
 
   useEffect(() => {
-    void window.electronAPI.getConfig().then((cfg) => setSoundOn(cfg.soundEnabled !== false))
+    void window.electronAPI.getConfig().then((cfg) => {
+      setSoundOn(cfg.soundEnabled !== false)
+      setSpecMenuOn(cfg.specMenuEnabled !== false)
+    })
   }, [])
 
   const changeMode = (m: ThemeMode) => {
@@ -523,6 +535,23 @@ function GeneralSection() {
           }}
         />
       </div>
+      <div className="settings-gen-row">
+        <div className="settings-gen-info">
+          <span className="settings-gen-label">{t('specMenuLabel')}</span>
+          <span className="settings-gen-sub">{t('specMenuDesc')}</span>
+        </div>
+        <button
+          type="button"
+          className={`switch ${specMenuOn ? 'on' : ''}`}
+          onClick={() => {
+            const next = !specMenuOn
+            setSpecMenuOn(next)
+            void window.electronAPI.setConfig('specMenuEnabled', next)
+            // 通知侧边栏立即显隐「设计规范」菜单
+            window.dispatchEvent(new CustomEvent('spec-menu-change'))
+          }}
+        />
+      </div>
       <AppIconPicker />
     </Section>
   )
@@ -577,6 +606,102 @@ function ToleranceSection() {
                   onChange={(e) => changeTolerance(f.key, e.target.value)}
                 />
                 <span className="settings-tol-unit">{f.key === 'color' ? 'ΔE' : 'px'}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+    </Section>
+  )
+}
+
+/** 分层还原度判定：开关 + 模块 / 元素两级容差 + 扣分权重（增量旁路，持久化在 walkLayeredTolerance 键） */
+function LayeredToleranceSection() {
+  const { t } = useTranslation('settings')
+  const [cfg, setCfg] = useState<LayeredToleranceConfig>(DEFAULT_LAYERED_TOLERANCE)
+
+  useEffect(() => {
+    window.electronAPI.getConfig().then((c) => {
+      setCfg(normalizeLayeredTolerance(c.walkLayeredTolerance as Partial<LayeredToleranceConfig> | undefined))
+    })
+  }, [])
+
+  /** 更新单个字段并持久化：容差 ≥0，权重 clamp 0~1（Settings 为独立页面，挂载时整对象读一次，写回安全） */
+  const changeField = (key: keyof LayeredToleranceConfig, value: string): void => {
+    const n = Number(value)
+    if (!Number.isFinite(n)) return
+    const clamped = key.startsWith('weight') ? Math.max(0, Math.min(1, n)) : Math.max(0, n)
+    const next = { ...cfg, [key]: Math.round(clamped * 100) / 100 }
+    setCfg(next)
+    void window.electronAPI.setConfig(LAYERED_TOLERANCE_KEY, next)
+  }
+
+  /** 切换分层开关（enabled 必须显式 true 才参与计算，关闭时与现状行为一致） */
+  const toggleEnabled = (v: boolean): void => {
+    const next = { ...cfg, enabled: v }
+    setCfg(next)
+    void window.electronAPI.setConfig(LAYERED_TOLERANCE_KEY, next)
+  }
+
+  /** 数值字段键（排除 enabled 布尔键），供容差 / 权重输入框取值 */
+  type NumKey = Exclude<keyof LayeredToleranceConfig, 'enabled'>
+  const TOL_FIELDS: { key: NumKey; label: string; hint: string }[] = [
+    { key: 'modulePosTol', label: t('layered_tol_module_pos'), hint: t('layered_tol_module_pos_hint') },
+    { key: 'moduleSizeTol', label: t('layered_tol_module_size'), hint: t('layered_tol_module_size_hint') },
+    { key: 'elementPosTol', label: t('layered_tol_element_pos'), hint: t('layered_tol_element_pos_hint') },
+    { key: 'elementSizeTol', label: t('layered_tol_element_size'), hint: t('layered_tol_element_size_hint') }
+  ]
+
+  const WEIGHT_FIELDS: { key: NumKey; label: string; hint: string }[] = [
+    { key: 'weightModule', label: t('layered_w_module'), hint: t('layered_w_module_hint') },
+    { key: 'weightElement', label: t('layered_w_element'), hint: t('layered_w_element_hint') },
+    { key: 'weightPosition', label: t('layered_w_position'), hint: t('layered_w_position_hint') },
+    { key: 'weightSize', label: t('layered_w_size'), hint: t('layered_w_size_hint') }
+  ]
+
+  return (
+    <Section title={t('layeredTitle')} desc={t('layeredDesc')}>
+      <div className="settings-tolerance">
+        <div className="walk-opt-switch-row">
+          <span>{t('layered_toggle')}</span>
+          <button
+            type="button"
+            className={`switch ${cfg.enabled ? 'on' : ''}`}
+            title={cfg.enabled ? t('layered_off') : t('layered_on')}
+            onClick={() => toggleEnabled(!cfg.enabled)}
+          />
+        </div>
+        <div className="settings-tol-grid">
+          {TOL_FIELDS.map((f) => (
+            <label key={f.key} className="settings-tol-item" title={f.hint}>
+              <span className="settings-tol-label">{f.label}</span>
+              <span className="settings-tol-input">
+                <input
+                  className="input input-sm"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={cfg[f.key]}
+                  onChange={(e) => changeField(f.key, e.target.value)}
+                />
+                <span className="settings-tol-unit">px</span>
+              </span>
+            </label>
+          ))}
+          {WEIGHT_FIELDS.map((f) => (
+            <label key={f.key} className="settings-tol-item" title={f.hint}>
+              <span className="settings-tol-label">{f.label}</span>
+              <span className="settings-tol-input">
+                <input
+                  className="input input-sm"
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.1}
+                  value={cfg[f.key]}
+                  onChange={(e) => changeField(f.key, e.target.value)}
+                />
+                <span className="settings-tol-unit">0~1</span>
               </span>
             </label>
           ))}
@@ -1361,18 +1486,18 @@ function AboutSection() {
           <p className="settings-desc about-desc">
             {t('aboutDesc')}
           </p>
-          <div className="about-meta">
-            <div className="about-meta-line">
-              <span className="about-meta-label">{t('author')}</span>
-              <a className="settings-link" href="https://quweijia.is-a.dev/" target="_blank" rel="noreferrer">
-                Vic Qu ↗
-              </a>
-            </div>
-            <div className="about-meta-line">
-              <span className="about-meta-label">{t('techStack')}</span>
-              <span>Electron · React · TypeScript · Dexie</span>
-            </div>
-          </div>
+        </div>
+      </div>
+      <div className="about-meta">
+        <div className="about-meta-line">
+          <span className="about-meta-label">{t('author')}</span>
+          <a className="settings-link" href="https://quweijia.is-a.dev/" target="_blank" rel="noreferrer">
+            Vic Qu ↗
+          </a>
+        </div>
+        <div className="about-meta-line">
+          <span className="about-meta-label">{t('techStack')}</span>
+          <span>Electron · React · TypeScript · Dexie</span>
         </div>
       </div>
     </Section>
@@ -1509,7 +1634,12 @@ export default function Settings() {
       {tab === 'models' && <ModelsSection />}
       {tab === 'assistant' && <AssistantSection />}
       {tab === 'general' && <GeneralSection />}
-      {tab === 'tolerance' && <ToleranceSection />}
+      {tab === 'tolerance' && (
+        <>
+          <ToleranceSection />
+          <LayeredToleranceSection />
+        </>
+      )}
       {tab === 'mcp' && <McpSection />}
       {tab === 'skills' && <SkillsSection />}
       {tab === 'auth' && <AuthSection />}

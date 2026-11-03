@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 对比画布视图模式（对齐 CompareWorkbench.tsx `ViewMode` 与 i18n 文案）
-enum CanvasViewMode: String, CaseIterable, Identifiable {
+enum CanvasViewMode: String, CaseIterable, Identifiable, CustomStringConvertible {
     case sideBySide = "side-by-side"
     case onion
     case slider
@@ -17,6 +17,8 @@ enum CanvasViewMode: String, CaseIterable, Identifiable {
         case .blink: "差异闪烁"
         }
     }
+
+    var description: String { label }
 
     /// 叠加三模式共用一个画布视口（base=设计稿，top=开发截图）
     var isOverlay: Bool { self != .sideBySide }

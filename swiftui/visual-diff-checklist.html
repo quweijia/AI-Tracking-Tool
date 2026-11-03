@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SwiftUI 视觉对齐 Electron 原版 - 差异核对清单</title>
+<style>
+  :root {
+    --primary: #2563eb;
+    --primary-dark: #1d4ed8;
+    --primary-soft: #dbeafe;
+    --success: #16a34a;
+    --success-bg: #dcfce7;
+    --warning: #d97706;
+    --warning-bg: #fef3c7;
+    --danger: #dc2626;
+    --danger-bg: #fee2e2;
+    --text: #111827;
+    --text-secondary: #4b5563;
+    --text-tertiary: #9ca3af;
+    --app-bg: #f3f4f6;
+    --card-bg: #ffffff;
+    --fill: #f9fafb;
+    --border: #e5e7eb;
+    --border-light: #f3f4f6;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --shadow-card: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+    --shadow-hover: 0 4px 12px rgba(0,0,0,.08), 0 2px 4px rgba(0,0,0,.04);
+    --font-sans: -apple-system, "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "SF Mono", "Fira Code", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text);
+    background: var(--app-bg);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+  }
+
+  /* Header */
+  .header {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+    color: #fff;
+    padding: 48px 32px 40px;
+    border-radius: var(--radius-lg);
+    margin-bottom: 32px;
+    position: relative;
+    overflow: hidden;
+  }
+  .header::after {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -10%;
+    width: 300px;
+    height: 300px;
+    background: radial-gradient(circle, rgba(255,255,255,.08) 0%, transparent 70%);
+    border-radius: 50%;
+  }
+  .header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 8px;
+  }
+  .header .subtitle {
+    font-size: 15px;
+    opacity: 0.85;
+    font-weight: 400;
+  }
+  .header .meta {
+    margin-top: 20px;
+    display: flex;
+    gap: 24px;
+    font-size: 13px;
+    opacity: 0.75;
+  }
+  .header .meta span { display: flex; align-items: center; gap: 6px; }
+
+  /* Section */
+  .section {
+    margin-bottom: 32px;
+  }
+  .section-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid var(--primary);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .section-title .icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  .section-desc {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+    margin-top: -8px;
+  }
+
+  /* Cards */
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+    overflow: hidden;
+  }
+
+  /* Table */
+  .table-wrap {
+    overflow-x: auto;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  thead th {
+    background: var(--fill);
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 12px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  tbody td {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-light);
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--border-light); }
+
+  /* Badges */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 99px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .badge-done { background: var(--success-bg); color: var(--success); }
+  .badge-warn { background: var(--warning-bg); color: var(--warning); }
+  .badge-err  { background: var(--danger-bg); color: var(--danger); }
+  .badge-info { background: var(--primary-soft); color: var(--primary); }
+
+  /* Color swatch */
+  .swatch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+  }
+  .swatch-color {
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  /* Code */
+  code {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    background: var(--fill);
+    border: 1px solid var(--border-light);
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--primary);
+  }
+
+  /* Grid for token groups */
+  .token-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .token-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--fill);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-light);
+  }
+  .token-item .label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    min-width: 80px;
+  }
+  .token-item .value {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  /* TODO list */
+  .todo-list { list-style: none; }
+  .todo-item {
+    display: flex;
+    gap: 12px;
+    padding: 16px;
+    border-bottom: 1px solid var(--border-light);
+    align-items: flex-start;
+  }
+  .todo-item:last-child { border-bottom: none; }
+  .todo-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .todo-icon.blocked  { background: var(--danger-bg); color: var(--danger); }
+  .todo-icon.attention { background: var(--warning-bg); color: var(--warning); }
+  .todo-text { flex: 1; }
+  .todo-text strong { display: block; margin-bottom: 2px; }
+  .todo-text p { font-size: 13px; color: var(--text-secondary); margin: 0; }
+
+  /* Component card grid */
+  .comp-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 12px;
+  }
+  .comp-card {
+    padding: 16px;
+    background: var(--fill);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-light);
+  }
+  .comp-card h4 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 6px;
+    font-family: var(--font-mono);
+    color: var(--primary);
+  }
+  .comp-card p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  /* Summary bar */
+  .summary-bar {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 32px;
+    flex-wrap: wrap;
+  }
+  .summary-stat {
+    flex: 1;
+    min-width: 140px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 20px;
+    text-align: center;
+    box-shadow: var(--shadow-card);
+  }
+  .summary-stat .num {
+    font-size: 32px;
+    font-weight: 800;
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+  .summary-stat .num.green  { color: var(--success); }
+  .summary-stat .num.yellow { color: var(--warning); }
+  .summary-stat .num.red    { color: var(--danger); }
+  .summary-stat .num.blue   { color: var(--primary); }
+  .summary-stat .label {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+
+  /* Before/After tags */
+  .before-after {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .before-after > div {
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    line-height: 1.5;
+  }
+  .before-tag {
+    background: var(--danger-bg);
+    border: 1px solid #fecaca;
+    color: var(--danger);
+  }
+  .after-tag {
+    background: var(--success-bg);
+    border: 1px solid #bbf7d0;
+    color: var(--success);
+  }
+  .before-tag strong, .after-tag strong {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 2px;
+    opacity: 0.7;
+  }
+
+  /* Print */
+  @media print {
+    body { background: #fff; font-size: 12px; }
+    .container { padding: 0; max-width: 100%; }
+    .header { padding: 24px; border-radius: 0; }
+    .card { box-shadow: none; border: 1px solid #ddd; }
+    .summary-stat { box-shadow: none; border: 1px solid #ddd; }
+  }
+
+  @media (max-width: 768px) {
+    .container { padding: 16px; }
+    .header { padding: 32px 20px 28px; }
+    .header h1 { font-size: 22px; }
+    .before-after { grid-template-columns: 1fr; }
+    .summary-bar { gap: 8px; }
+    .summary-stat { min-width: 100px; padding: 14px; }
+    .summary-stat .num { font-size: 24px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>SwiftUI 视觉对齐 Electron 原版</h1>
+    <div class="subtitle">差异核对清单 · 完整重写项目 UITalkthrough</div>
+    <div class="meta">
+      <span>📅 2026-10-30</span>
+      <span>🖥️ Electron → SwiftUI</span>
+      <span>📊 8 个视图 · 14 个组件 · 50+ 设计 Token</span>
+    </div>
+  </div>
+
+  <!-- Summary -->
+  <div class="summary-bar">
+    <div class="summary-stat">
+      <div class="num green">8</div>
+      <div class="label">已完成视图</div>
+    </div>
+    <div class="summary-stat">
+      <div class="num blue">14</div>
+      <div class="label">自定义组件</div>
+    </div>
+    <div class="summary-stat">
+      <div class="num yellow">2</div>
+      <div class="label">待解决问题</div>
+    </div>
+    <div class="summary-stat">
+      <div class="num red">2</div>
+      <div class="label">需人工确认</div>
+    </div>
+  </div>
+
+  <!-- 1. Design Tokens -->
+  <div class="section">
+    <h2 class="section-title">
+      <span class="icon" style="background:#dbeafe;color:#2563eb;">◆</span>
+      一、设计 Tokens 摘要
+    </h2>
+    <p class="section-desc">所有视图统一使用 <code>DesignTokens</code> 枚举，取代系统默认色/字号/间距。</p>
+
+    <h3 style="font-size:15px;font-weight:600;margin:20px 0 12px;color:var(--text-secondary);">颜色体系</h3>
+    <div class="token-grid">
+      <div class="token-item"><span class="swatch"><span class="swatch-color" style="background:#2563eb;"></span> Primary</span><span class="value">#2563eb</span></div>
+      <div class="token-item"><span class="swatch"><span class="swatch-color" style="background:#1d4ed8;"></span> PrimaryDark</span><span class="value">#1d4ed8</span></div>
+      <div class="token-item"><span class="swatch"><span class="swatch-color" style="background:#dbeafe;"></span> PrimarySoft</span><span class="value">#dbeafe</span></div>
+      <div class="token-item"><span class="swatch"><span class="swatch-color" style="background:#16a34a;"></span> Success</span><span class="value">#16a34a</span></div>
+      <div class="token-item"><span class="swatch"><span class="swatch-color" style="background:#d97706;"></span> Warning</span><span class="value">#d97706</span></div>
+      <div class="token-item"><span class="swatch"><span class="swatch-color" style="background:#dc2626;"></span> Danger</span><span class="value">#dc2626</span></div>
+      <div class="token-item"><span class="swatch"><span class="swatch-color" style="background:#111827;"></span> Text</span><span class="value">#111827</span></div>
+      <div class="token-item"><span class="swatch"><span class="swatch-color" style="background:#4b5563;"></span> TextSecondary</span><span class="value">#4b5563</span></div>
+      <div class="token-item"><span class="swatch"><span class="swatch-color" style="background:#9ca3af;"></span> TextTertiary</span><span class="value">#9ca3af</span></div>
+      <div class="token-item"><span class="swatch"><span class="swatch-color" style="background:#f3f4f6;border-color:#d1d5db;"></span> AppBg</span><span class="value">#f3f4f6</span></div>
+      <div class="token-item"><span class="swatch"><span class="swatch-color" style="background:#ffffff;border-color:#e5e7eb;"></span> CardBg</span><span class="value">#ffffff</span></div>
+      <div class="token-item"><span class="swatch"><span class="swatch-color" style="background:#f9fafb;"></span> Fill</span><span class="value">#f9fafb</span></div>
+      <div class="token-item"><span class="swatch"><span class="swatch-color" style="background:#e5e7eb;"></span> Border</span><span class="value">#e5e7eb</span></div>
+    </div>
+
+    <h3 style="font-size:15px;font-weight:600;margin:20px 0 12px;color:var(--text-secondary);">字号体系</h3>
+    <div class="card table-wrap">
+      <table>
+        <thead>
+          <tr><th>Token</th><th>字号</th><th>字重</th><th>用途</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>pageHeader</code></td><td>20px</td><td>Semibold</td><td>页面主标题</td></tr>
+          <tr><td><code>sectionHeader</code></td><td>15px</td><td>Semibold</td><td>区块标题</td></tr>
+          <tr><td><code>body</code></td><td>14px</td><td>Regular</td><td>正文</td></tr>
+          <tr><td><code>bodySmall</code></td><td>13px</td><td>Regular</td><td>辅助正文</td></tr>
+          <tr><td><code>caption</code></td><td>12.5px</td><td>Regular</td><td>标注文字</td></tr>
+          <tr><td><code>captionSmall</code></td><td>12px</td><td>Regular</td><td>次级标注</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="font-size:15px;font-weight:600;margin:20px 0 12px;color:var(--text-secondary);">间距体系（4px Grid）</h3>
+    <div class="token-grid">
+      <div class="token-item"><span class="label">xxs</span><span class="value">2px</span></div>
+      <div class="token-item"><span class="label">xs</span><span class="value">4px</span></div>
+      <div class="token-item"><span class="label">sm</span><span class="value">6px</span></div>
+      <div class="token-item"><span class="label">md</span><span class="value">8px</span></div>
+      <div class="token-item"><span class="label">mg</span><span class="value">10px</span></div>
+      <div class="token-item"><span class="label">lg</span><span class="value">12px</span></div>
+      <div class="token-item"><span class="label">xl</span><span class="value">14px</span></div>
+      <div class="token-item"><span class="label">xlg</span><span class="value">16px</span></div>
+      <div class="token-item"><span class="label">xxl</span><span class="value">18px</span></div>
+      <div class="token-item"><span class="label">xlg2</span><span class="value">20px</span></div>
+      <div class="token-item"><span class="label">hero</span><span class="value">24px</span></div>
+      <div class="token-item"><span class="label">hlg</span><span class="value">30px</span></div>
+      <div class="token-item"><span class="label">huge</span><span class="value">40px</span></div>
+    </div>
+
+    <h3 style="font-size:15px;font-weight:600;margin:20px 0 12px;color:var(--text-secondary);">圆角体系</h3>
+    <div class="token-grid">
+      <div class="token-item"><span class="label">tiny</span><span class="value">4px</span></div>
+      <div class="token-item"><span class="label">xs</span><span class="value">6px</span></div>
+      <div class="token-item"><span class="label">sm</span><span class="value">8px</span></div>
+      <div class="token-item"><span class="label">md</span><span class="value">10px</span></div>
+      <div class="token-item"><span class="label">lg</span><span class="value">12px</span></div>
+      <div class="token-item"><span class="label">pill</span><span class="value">999px</span></div>
+    </div>
+
+    <h3 style="font-size:15px;font-weight:600;margin:20px 0 12px;color:var(--text-secondary);">阴影体系</h3>
+    <div class="token-grid">
+      <div class="token-item"><span class="label">card</span><span class="value">0 1px 3px rgba(0,0,0,.06)</span></div>
+      <div class="token-item"><span class="label">pop</span><span class="value">0 4px 16px rgba(0,0,0,.1)</span></div>
+      <div class="token-item"><span class="label">hover</span><span class="value">0 4px 12px rgba(0,0,0,.08)</span></div>
+      <div class="token-item"><span class="label">batchBar</span><span class="value">0 -2px 8px rgba(0,0,0,.06)</span></div>
+    </div>
+  </div>
+
+  <!-- 2. Per-Screen Diff -->
+  <div class="section">
+    <h2 class="section-title">
+      <span class="icon" style="background:#dcfce7;color:#16a34a;">▦</span>
+      二、逐屏差异核对
+    </h2>
+    <p class="section-desc">对比每个视图重写前后的实现差异，标注完成状态。</p>
+
+    <div class="card table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:160px;">视图</th>
+            <th>Before（Electron 风格）</th>
+            <th>After（SwiftUI 重写）</th>
+            <th style="width:90px;">状态</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>RootView</strong><br><span style="font-size:12px;color:var(--text-tertiary);">侧边栏 + 顶栏</span></td>
+            <td>
+              <div class="before-after">
+                <div class="before-tag"><strong>Before</strong>NavigationSplitView + List<br>系统默认 SwiftUI 侧边栏样式</div>
+                <div class="after-tag"><strong>After</strong>AppSidebar 200px 白色底<br>导航圆点 + DesignTokens 配色<br>AppTopBar 52px 顶栏</div>
+              </div>
+            </td>
+            <td></td>
+            <td><span class="badge badge-done">✅ 已完成</span></td>
+          </tr>
+          <tr>
+            <td><strong>ProjectsHomeView</strong><br><span style="font-size:12px;color:var(--text-tertiary);">项目列表页</span></td>
+            <td>
+              <div class="before-after">
+                <div class="before-tag"><strong>Before</strong>默认 List + ContentUnavailableView<br>系统 Button + Label</div>
+                <div class="after-tag"><strong>After</strong>AppCardHover 卡片列表<br>AppButton + AppEmptyState<br>DesignTokens 网格间距</div>
+              </div>
+            </td>
+            <td></td>
+            <td><span class="badge badge-done">✅ 已完成</span></td>
+          </tr>
+          <tr>
+            <td><strong>ProjectDetailView</strong><br><span style="font-size:12px;color:var(--text-tertiary);">项目详情页</span></td>
+            <td>
+              <div class="before-after">
+                <div class="before-tag"><strong>Before</strong>List with sidebar style<br>默认卡片样式</div>
+                <div class="after-tag"><strong>After</strong>ScrollView + VStack 树形<br>AppCardWithRadius 页面卡片<br>DesignTokens 字号体系</div>
+              </div>
+            </td>
+            <td></td>
+            <td><span class="badge badge-done">✅ 已完成</span></td>
+          </tr>
+          <tr>
+            <td><strong>CompareWorkbenchView</strong><br><span style="font-size:12px;color:var(--text-tertiary);">工作台</span></td>
+            <td>
+              <div class="before-after">
+                <div class="before-tag"><strong>Before</strong>默认 SwiftUI 组件<br>系统颜色 + 默认间距</div>
+                <div class="after-tag"><strong>After</strong>headerBar cardBg + border<br>focusBar primarySoft<br>toolbar 使用 DesignTokens<br>toolRail AppIconButton</div>
+              </div>
+            </td>
+            <td></td>
+            <td><span class="badge badge-done">✅ 已完成</span></td>
+          </tr>
+          <tr>
+            <td><strong>SettingsView</strong><br><span style="font-size:12px;color:var(--text-tertiary);">设置页</span></td>
+            <td>
+              <div class="before-after">
+                <div class="before-tag"><strong>Before</strong>GroupBox + TextField<br>.roundedBorder 样式<br>系统 Button</div>
+              </div>
+            </td>
+            <td>
+              <div class="before-after">
+                <div style="visibility:hidden"><strong>x</strong>x</div>
+                <div class="after-tag"><strong>After</strong>AppCard 卡片容器<br>AppInput 输入框样式<br>AppButton primary/secondary/text</div>
+              </div>
+            </td>
+            <td><span class="badge badge-done">✅ 已完成</span></td>
+          </tr>
+          <tr>
+            <td><strong>ReportsHomeView</strong><br><span style="font-size:12px;color:var(--text-tertiary);">报告页</span></td>
+            <td>
+              <div class="before-after">
+                <div class="before-tag"><strong>Before</strong>默认颜色和组件<br>系统色板</div>
+                <div class="after-tag"><strong>After</strong>Hero 渐变 (primary→primaryDark)<br>AppCard 卡片<br>AppInput 搜索框<br>AppButton 操作按钮</div>
+              </div>
+            </td>
+            <td></td>
+            <td><span class="badge badge-done">✅ 已完成</span></td>
+          </tr>
+          <tr>
+            <td><strong>SpecSpaceView</strong><br><span style="font-size:12px;color:var(--text-tertiary);">规范空间</span></td>
+            <td>
+              <div class="before-after">
+                <div class="before-tag"><strong>Before</strong>系统颜色 .blue / .green / .tint / .secondary</div>
+                <div class="after-tag"><strong>After</strong>DesignTokens 颜色<br>.primary / .success / .primarySoft / .textSecondary</div>
+              </div>
+            </td>
+            <td></td>
+            <td><span class="badge badge-done">✅ 已完成</span></td>
+          </tr>
+          <tr>
+            <td><strong>CommonViews</strong><br><span style="font-size:12px;color:var(--text-tertiary);">通用组件</span></td>
+            <td>
+              <div class="before-after">
+                <div class="before-tag"><strong>Before</strong>默认 SwiftUI badge 颜色</div>
+                <div class="after-tag"><strong>After</strong>DesignTokens badge 颜色<br>badgeH5 / badgePC / badgeDashboard / badgeElectron</div>
+              </div>
+            </td>
+            <td></td>
+            <td><span class="badge badge-done">✅ 已完成</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 3. Component Library -->
+  <div class="section">
+    <h2 class="section-title">
+      <span class="icon" style="background:#ede9fe;color:#7c3aed;">⬡</span>
+      三、组件库映射
+    </h2>
+    <p class="section-desc">14 个自定义组件，全面替换系统默认组件，统一视觉语言。</p>
+    <div class="comp-grid">
+      <div class="comp-card">
+        <h4>AppButton</h4>
+        <p>主按钮组件，支持 <code>primary</code> / <code>secondary</code> / <code>text</code> / <code>danger</code> 四种风格，统一圆角和间距。</p>
+      </div>
+      <div class="comp-card">
+        <h4>AppIconButton</h4>
+        <p>图标按钮，支持 active / inactive 状态切换，带高亮背景与阴影变化。</p>
+      </div>
+      <div class="comp-card">
+        <h4>AppCard</h4>
+        <p>基础卡片容器，带边框 + 阴影，圆角可配置，用于内容区块包裹。</p>
+      </div>
+      <div class="comp-card">
+        <h4>AppCardHover</h4>
+        <p>交互卡片，hover 时边框高亮 + 阴影增强 + 轻微上移（lift），用于可点击卡片列表。</p>
+      </div>
+      <div class="comp-card">
+        <h4>AppPanel</h4>
+        <p>面板容器，包含标题栏 + 分割线 + 内容区，用于设置页等场景。</p>
+      </div>
+      <div class="comp-card">
+        <h4>AppInput</h4>
+        <p>输入框组件，基于 TextField，带 focus ring 焦点指示和自定义占位符样式。</p>
+      </div>
+      <div class="comp-card">
+        <h4>AppBadge</h4>
+        <p>文字徽章，支持自定义背景/前景色，预设 H5 / PC / Dashboard / Electron 四种平台色。</p>
+      </div>
+      <div class="comp-card">
+        <h4>AppSegmented</h4>
+        <p>分段选择器，支持多标签切换，选中态带 primary 背景和阴影。</p>
+      </div>
+      <div class="comp-card">
+        <h4>AppDivider</h4>
+        <p>分割线组件，支持自定义颜色和间距，用于区块分隔。</p>
+      </div>
+      <div class="comp-card">
+        <h4>AppEmptyState</h4>
+        <p>空状态展示，包含图标 + 标题 + 描述，用于无数据时的友好提示。</p>
+      </div>
+      <div class="comp-card">
+        <h4>AppSidebar</h4>
+        <p>侧边栏容器，200px 宽度白色背景，包含导航项列表。</p>
+      </div>
+      <div class="comp-card">
+        <h4>AppNavItem</h4>
+        <p>导航项，带圆点指示器，选中态有高亮背景和图标变色。</p>
+      </div>
+      <div class="comp-card">
+        <h4>AppTopBar</h4>
+        <p>顶部栏，52px 高度，包含 macOS 红绿灯按钮 + 搜索框 + 窗口标题。</p>
+      </div>
+      <div class="comp-card">
+        <h4>WindowControls</h4>
+        <p>macOS 红绿灯按钮模拟（关闭 / 最小化 / 最大化），配色与原生一致。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. Known Issues -->
+  <div class="section">
+    <h2 class="section-title">
+      <span class="icon" style="background:#fee2e2;color:#dc2626;">!</span>
+      四、已知问题与待办
+    </h2>
+    <p class="section-desc">需要后续跟进的问题清单，按严重程度排列。</p>
+    <div class="card">
+      <ul class="todo-list">
+        <li class="todo-item">
+          <span class="todo-icon blocked">✕</span>
+          <div class="todo-text">
+            <strong>深色模式未完成适配</strong>
+            <p><code>DesignTokens</code> 仅定义了 Dark 色板，但各视图代码尚未根据 <code>ColorScheme</code> 自动切换颜色。需要为所有视图添加浅色/深色条件判断。</p>
+          </div>
+        </li>
+        <li class="todo-item">
+          <span class="todo-icon blocked">✕</span>
+          <div class="todo-text">
+            <strong>动画未完全应用</strong>
+            <p>hover / 选中态动画已在组件中定义（如 AppCardHover 的 lift 效果），但部分视图（如 RootView 侧边栏导航项切换）尚未添加过渡动画。</p>
+          </div>
+        </li>
+        <li class="todo-item">
+          <span class="todo-icon attention">!</span>
+          <div class="todo-text">
+            <strong>截图对比待执行</strong>
+            <p>需要 Electron 版与 SwiftUI 版并排截图，逐项核对布局偏移、色彩偏差、字号差异、间距精度。建议至少覆盖 8 个核心页面的完整截图。</p>
+          </div>
+        </li>
+        <li class="todo-item">
+          <span class="todo-icon attention">!</span>
+          <div class="todo-text">
+            <strong>字体回退策略</strong>
+            <p>Electron 原版使用思源黑体（Source Han Sans SC），macOS SwiftUI 版已配置 PingFang SC 为首选字体。两者在同等字号下的渲染宽度可能略有差异，需要实测关键页面是否出现换行错位。</p>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div style="text-align:center;padding:32px 0 0;color:var(--text-tertiary);font-size:12px;border-top:1px solid var(--border);margin-top:16px;">
+    <p>UITalkthrough · SwiftUI 重写项目 · 视觉差异核对清单</p>
+    <p style="margin-top:4px;">生成时间：2026-10-30 · 下次更新：截图对比完成后</p>
+  </div>
+
+</div>
+</body>
+</html>

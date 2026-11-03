@@ -13,6 +13,7 @@ export default {
   copied: 'Copied',
   retry: 'Retry',
   loadingHistory: 'Loading conversation…',
+  thinking: 'Thinking…',
   inputPlaceholder: 'Type a question, @ to mention project/page/report/issue, Enter to send',
   send: 'Send',
   stop: 'Stop generating',

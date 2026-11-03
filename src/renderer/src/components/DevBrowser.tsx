@@ -15,8 +15,8 @@ export interface CaptureResult {
 export interface DevBrowserHandle {
   /** 重新加载当前页面 */
   reload: () => void
-  /** 执行一次采集：滚动置顶 →（整页模式临时拉高）→ DOM 采集 → 截图 → 还原 */
-  runCapture: (fullPage: boolean) => Promise<CaptureResult>
+  /** 执行一次采集：滚动置顶 →（整页模式临时拉高）→ DOM 采集 → 截图 → 还原；designHeight 为设计稿高度（如 Figma 画板高度），提供时整页截图严格按该高度采集 */
+  runCapture: (fullPage: boolean, designHeight?: number) => Promise<CaptureResult>
 }
 
 interface DevBrowserProps {
@@ -109,11 +109,17 @@ const DevBrowser = forwardRef<DevBrowserHandle, DevBrowserProps>(function DevBro
   }
 
   const doLoad = (wv: Electron.WebviewTag, target: string): void => {
+    if (!target) return
     requestedUrlRef.current = target
     setReady(false)
     setLoadingState(true)
     wv.loadURL(target).catch((err: unknown) => {
-      const msg = t('loadFailedReason', { reason: err instanceof Error ? err.message : String(err) })
+      // ERR_FAILED(-2)：loadURL promise 与 did-fail-load 事件双路径同时触发；
+      // 事件侧已有三级静默恢复（600ms 重载 → 切直连重载 → 才报错），
+      // promise 侧保持静默，避免重试即将成功前先闪错误横幅
+      const raw = err instanceof Error ? err.message : String(err)
+      if (raw.includes('ERR_FAILED (-2)')) return
+      const msg = t('loadFailedReason', { reason: raw })
       failLoad(msg)
       onFail?.(msg)
     })
@@ -219,7 +225,7 @@ const DevBrowser = forwardRef<DevBrowserHandle, DevBrowserProps>(function DevBro
     reload: () => {
       webviewRef.current?.reload()
     },
-    runCapture: async (fullPage: boolean): Promise<CaptureResult> => {
+    runCapture: async (fullPage: boolean, designHeight?: number): Promise<CaptureResult> => {
       const webview = webviewRef.current
       if (!webview) throw new Error(t('browserNotCreated'))
       // 页面可能仍在加载：等待 dom-ready；事件未触发时用 isLoading 轮询兜底
@@ -259,13 +265,16 @@ const DevBrowser = forwardRef<DevBrowserHandle, DevBrowserProps>(function DevBro
       // 1. 滚动到顶部，保证坐标与截图一致
       await execJs(webview, 'window.scrollTo(0, 0); true')
       await wait(300)
-      // 2. 整页模式：临时把 webview 高度拉到文档总高，等布局稳定
+      // 2. 整页模式：临时把 webview 高度拉到目标高度，等布局稳定
+      //    有设计高度（Figma 画板）时严格按设计尺寸采集，否则取文档实际总高
       if (fullPage) {
-        const docHeight = (await execJs(
-          webview,
-          'Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)'
-        )) as number
-        captureHeight.current = Math.min(Math.max(docHeight, viewport.height), 20000)
+        const targetHeight =
+          designHeight ??
+          ((await execJs(
+            webview,
+            'Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)'
+          )) as number)
+        captureHeight.current = Math.min(Math.max(targetHeight, viewport.height), 20000)
         forceRender((n) => n + 1)
         await wait(800)
       }

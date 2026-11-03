@@ -14,9 +14,9 @@ struct ProjectLogoView: View {
                     .resizable()
                     .scaledToFill()
             } else {
-                colorFromHex(ProjectBranding.logoBgHex(of: project)) ?? Color.accentColor
+                colorFromHex(ProjectBranding.logoBgHex(of: project)) ?? Color.primary
                 Text(String(project.name.prefix(1)))
-                    .font(.system(size: size * 0.5, weight: .semibold))
+                    .font(.system(size: size * 0.5, weight: FontTokens.Weight.semibold))
                     .foregroundStyle(.white)
             }
         }
@@ -29,13 +29,31 @@ struct ProjectLogoView: View {
 struct PlatformBadgeView: View {
     let platform: Platform
 
+    private var badgeColor: Color {
+        switch platform {
+        case .h5: return .badgeH5Text
+        case .pc: return .badgePCText
+        case .dashboard: return .badgeDashboardText
+        case .electron: return .badgeElectronText
+        }
+    }
+
+    private var badgeBg: Color {
+        switch platform {
+        case .h5: return Color.badgeH5
+        case .pc: return Color.badgePC
+        case .dashboard: return Color.badgeDashboard
+        case .electron: return Color.badgeElectron
+        }
+    }
+
     var body: some View {
         Text(platform.label)
-            .font(.caption2)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(.quaternary, in: Capsule())
-            .foregroundStyle(.secondary)
+            .font(.system(size: FontTokens.Size.captionSmall, weight: .medium))
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.xs)
+            .background(badgeBg, in: Capsule())
+            .foregroundStyle(badgeColor)
     }
 }
 
@@ -43,21 +61,29 @@ struct PlatformBadgeView: View {
 struct PageStatusBadgeView: View {
     let status: PageStatus
 
-    private var color: Color {
+    private var textColor: Color {
         switch status {
-        case .pending: .secondary
-        case .reviewing: .orange
-        case .completed: .green
+        case .pending: .textSecondary
+        case .reviewing: .warning
+        case .completed: .success
+        }
+    }
+
+    private var bgColor: Color {
+        switch status {
+        case .pending: .fill
+        case .reviewing: Color(hex: "#fef3e2") ?? .fill
+        case .completed: .successBg
         }
     }
 
     var body: some View {
         Text(status.label)
-            .font(.caption2)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.15), in: Capsule())
-            .foregroundStyle(color)
+            .font(.system(size: FontTokens.Size.captionSmall, weight: .medium))
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.xs)
+            .background(bgColor, in: Capsule())
+            .foregroundStyle(textColor)
     }
 }
 
@@ -73,9 +99,9 @@ struct LocalImageView: View {
                 .aspectRatio(contentMode: contentMode)
         } else {
             ZStack {
-                Rectangle().fill(.quaternary)
+                Rectangle().fill(Color.fill)
                 Image(systemName: "photo")
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Color.textTertiary)
             }
         }
     }

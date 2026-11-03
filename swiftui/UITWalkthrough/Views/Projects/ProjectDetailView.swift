@@ -40,15 +40,9 @@ struct ProjectDetailView: View {
         .navigationTitle(project?.name ?? "项目详情")
         .toolbar {
             ToolbarItemGroup {
-                Button { folderSheet = .create(parentId: scopeFolderID) } label: {
-                    Label("新建文件夹", systemImage: "folder.badge.plus")
-                }
-                Button { pageSheet = .create(projectId: projectID, folderId: scopeFolderID) } label: {
-                    Label("新建页面", systemImage: "plus.rectangle.on.rectangle")
-                }
-                Button { editingProject = project } label: {
-                    Label("编辑项目", systemImage: "pencil")
-                }
+                AppIconButton("folder.badge.plus") { folderSheet = .create(parentId: scopeFolderID) }
+                AppIconButton("plus.rectangle.on.rectangle") { pageSheet = .create(projectId: projectID, folderId: scopeFolderID) }
+                AppIconButton("pencil") { editingProject = project }
             }
         }
         .sheet(item: $pageSheet) { PageSheet(mode: $0) }
@@ -98,29 +92,52 @@ struct ProjectDetailView: View {
     // MARK: - 左侧树
 
     private var treeColumn: some View {
-        List {
-            Section {
-                Label("全部页面", systemImage: "square.grid.2x2")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                // Header
+                Text("页面树")
+                    .font(.system(size: FontTokens.Size.bodySmall, weight: FontTokens.Weight.medium))
+                    .foregroundStyle(Color.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Spacing.xlg)
+                    .padding(.vertical, Spacing.md)
+
+                Divider()
+
+                // Tree items
+                VStack(alignment: .leading, spacing: 0) {
+                    // All pages row
+                    HStack(spacing: Spacing.md) {
+                        Image(systemName: "square.grid.2x2")
+                            .foregroundStyle(Color.textSecondary)
+                            .font(.system(size: FontTokens.Size.bodySmall))
+                        Text("全部页面")
+                            .font(.system(size: FontTokens.Size.bodySmall, weight: FontTokens.Weight.medium))
+                            .foregroundStyle(Color.text)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Spacing.xlg)
+                    .padding(.vertical, Spacing.xxs)
                     .contentShape(Rectangle())
                     .onTapGesture { scopeFolderID = nil }
-                ForEach(rootFolders) { folder in
-                    FolderNodeView(
-                        folder: folder,
-                        folders: sortedFolders,
-                        pages: sortedPages,
-                        selectedFolderID: $scopeFolderID,
-                        renaming: { renamingTarget = $0 },
-                        deleting: { deletingFolder = $0 }
-                    )
+
+                    ForEach(rootFolders) { folder in
+                        FolderNodeView(
+                            folder: folder,
+                            folders: sortedFolders,
+                            pages: sortedPages,
+                            selectedFolderID: $scopeFolderID,
+                            renaming: { renamingTarget = $0 },
+                            deleting: { deletingFolder = $0 }
+                        )
+                    }
+                    ForEach(rootPages) { page in
+                        treePageRow(page)
+                    }
                 }
-                ForEach(rootPages) { page in
-                    treePageRow(page)
-                }
-            } header: {
-                Text("页面树")
             }
         }
-        .listStyle(.sidebar)
         .frame(minWidth: 220, idealWidth: 250)
     }
 
@@ -128,15 +145,19 @@ struct ProjectDetailView: View {
     private var rootPages: [WalkthroughPage] { sortedPages.filter { $0.folderId == nil } }
 
     private func treePageRow(_ page: WalkthroughPage) -> some View {
-        HStack {
+        HStack(spacing: Spacing.md) {
             Image(systemName: "doc.text")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.textSecondary)
+                .font(.system(size: FontTokens.Size.bodySmall))
             Text(page.pageName)
+                .font(.system(size: FontTokens.Size.bodySmall, weight: FontTokens.Weight.medium))
+                .foregroundStyle(Color.text)
                 .lineLimit(1)
             Spacer()
             PageStatusBadgeView(status: page.status)
         }
-        .padding(.vertical, 2)
+        .padding(.horizontal, Spacing.xlg)
+        .padding(.vertical, Spacing.xxs)
         .contentShape(Rectangle())
         .onTapGesture { appState.open(page: page, context: context) }
         .contextMenu {
@@ -158,16 +179,15 @@ struct ProjectDetailView: View {
     private var gridColumn: some View {
         ScrollView {
             LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 220), spacing: 16)],
-                spacing: 16
+                columns: [GridItem(.adaptive(minimum: 220), spacing: Spacing.xlg)],
+                spacing: Spacing.xlg
             ) {
                 if gridPages.isEmpty {
-                    ContentUnavailableView(
+                    AppEmptyState(
                         "暂无页面",
-                        systemImage: "photo.stack",
-                        description: Text("点击工具栏「新建页面」上传设计稿与开发截图")
+                        description: "点击工具栏「新建页面」上传设计稿与开发截图",
+                        systemImage: "photo.stack"
                     )
-                    .frame(maxWidth: .infinity, minHeight: 360)
                     .gridCellColumns(3)
                 }
                 ForEach(gridPages) { page in
@@ -180,7 +200,7 @@ struct ProjectDetailView: View {
                     }
                 }
             }
-            .padding(20)
+            .padding(Spacing.xlg)
         }
     }
 
@@ -285,9 +305,14 @@ private struct FolderNodeView: View {
                 )
             }
             ForEach(folderPages) { page in
-                HStack {
-                    Image(systemName: "doc.text").foregroundStyle(.secondary)
-                    Text(page.pageName).lineLimit(1)
+                HStack(spacing: Spacing.md) {
+                    Image(systemName: "doc.text")
+                        .foregroundStyle(Color.textSecondary)
+                        .font(.system(size: FontTokens.Size.bodySmall))
+                    Text(page.pageName)
+                        .font(.system(size: FontTokens.Size.bodySmall, weight: FontTokens.Weight.medium))
+                        .foregroundStyle(Color.text)
+                        .lineLimit(1)
                     Spacer()
                     PageStatusBadgeView(status: page.status)
                 }
@@ -299,13 +324,16 @@ private struct FolderNodeView: View {
                 }
             }
         } label: {
-            HStack {
+            HStack(spacing: Spacing.md) {
                 folderIcon
-                Text(folder.name).lineLimit(1)
+                Text(folder.name)
+                    .font(.system(size: FontTokens.Size.bodySmall, weight: FontTokens.Weight.medium))
+                    .foregroundStyle(Color.text)
+                    .lineLimit(1)
                 Spacer()
                 Text("\(folderPages.count)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: FontTokens.Size.captionSmall))
+                    .foregroundStyle(Color.textSecondary)
             }
             .contentShape(Rectangle())
             .onTapGesture { selectedFolderID = folder.id }
@@ -319,6 +347,7 @@ private struct FolderNodeView: View {
     private var folderIcon: some View {
         Image(systemName: "folder.fill")
             .foregroundStyle(colorFromHex(folder.color ?? "") ?? Color.accentColor)
+            .font(.system(size: FontTokens.Size.bodySmall))
     }
 }
 
@@ -331,27 +360,27 @@ private struct PageCardView: View {
     let delete: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            LocalImageView(relativePath: page.designImagePath)
-                .frame(height: 130)
-                .clipped()
-            VStack(alignment: .leading, spacing: 6) {
-                Text(page.pageName)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
-                HStack(spacing: 6) {
-                    PlatformBadgeView(platform: page.platform)
-                    PageStatusBadgeView(status: page.status)
-                    Spacer()
-                    Text(timeAgo(page.updatedAt ?? page.createdAt))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+        AppCardWithRadius(padding: SizeTokens.cardPaddingCompact, cornerRadius: Radius.md) {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                LocalImageView(relativePath: page.designImagePath)
+                    .frame(height: 130)
+                    .clipped()
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text(page.pageName)
+                        .font(.system(size: FontTokens.Size.bodySmall, weight: FontTokens.Weight.medium))
+                        .foregroundStyle(Color.text)
+                        .lineLimit(1)
+                    HStack(spacing: Spacing.sm) {
+                        PlatformBadgeView(platform: page.platform)
+                        PageStatusBadgeView(status: page.status)
+                        Spacer()
+                        Text(timeAgo(page.updatedAt ?? page.createdAt))
+                            .font(.system(size: FontTokens.Size.captionSmall))
+                            .foregroundStyle(Color.textSecondary)
+                    }
                 }
             }
-            .padding(10)
         }
-        .background(.background, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator, lineWidth: 1))
         .contentShape(Rectangle())
         .onTapGesture(count: 2, perform: open)
         .contextMenu {
@@ -359,6 +388,25 @@ private struct PageCardView: View {
             Button("编辑信息") { edit() }
             Button("删除页面", role: .destructive) { delete() }
         }
+    }
+}
+
+// MARK: - 自定义圆角的卡片（AppCard 不支持自定义 cornerRadius）
+
+private struct AppCardWithRadius<Content: SwiftUI.View>: View {
+    var padding: CGFloat
+    var cornerRadius: CGFloat
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        content()
+            .padding(padding)
+            .background(Color.cardBg, in: RoundedRectangle(cornerRadius: cornerRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .strokeBorder(Color.border, lineWidth: 1)
+            )
+            .shadow(color: Shadow.card.color, radius: Shadow.card.radius, x: Shadow.card.x, y: Shadow.card.y)
     }
 }
 

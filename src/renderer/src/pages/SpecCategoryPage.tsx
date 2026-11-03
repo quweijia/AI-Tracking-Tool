@@ -213,12 +213,6 @@ export default function SpecCategoryPage() {
   const bindingsAll = useLiveQuery(() => db.projectSpecBindings.toArray(), [])
   const projects = useLiveQuery(async () => (await db.projects.toArray()).sort(bySort), [])
 
-  // PAT 有无（连接状态卡三态）
-  const [hasPat, setHasPat] = useState(false)
-  useEffect(() => {
-    void getFigmaPat().then((p) => setHasPat(!!p))
-  }, [])
-
   // ───────────── 本地状态 ─────────────
   const [srcTab, setSrcTab] = useState<'url' | 'fig' | 'json'>('url')
   const [urlDraft, setUrlDraft] = useState('')
@@ -524,10 +518,10 @@ export default function SpecCategoryPage() {
     [tokens]
   )
 
-  /** 连接状态三态：有 file key + PAT → 正常；有 key 无 PAT → 缺 Token；无 → 未连接 */
-  const connState = !activeSpec?.figmaFileKey ? 'none' : hasPat ? 'ok' : 'nopat'
-
   const archiveName = activeSpec?.figArchivePath?.split(/[\\/]/).pop()
+
+  /** 本地导入源文件：.fig 存档 / JSON 导入文件名（来源卡底部按 tab 显示对应卡片） */
+  const jsonNames = activeSpec?.jsonSourceNames ?? []
 
   // ───────────── 处理函数 ─────────────
   const handleVerify = async () => {
@@ -585,6 +579,18 @@ export default function SpecCategoryPage() {
     if (res) await db.designSpecs.update(activeSpec.id, { figArchivePath: res.relativePath })
   }
 
+  /** 移除 .fig 源文件记录（仅清展示，不影响已导入的 Token / 版本） */
+  const handleRemoveFig = async () => {
+    if (!activeSpec || !window.confirm(t('srcRemoveConfirm'))) return
+    await db.designSpecs.update(activeSpec.id, { figArchivePath: undefined })
+  }
+
+  /** 移除 JSON 源文件记录 */
+  const handleRemoveJson = async () => {
+    if (!activeSpec || !window.confirm(t('srcRemoveConfirm'))) return
+    await db.designSpecs.update(activeSpec.id, { jsonSourceNames: undefined })
+  }
+
   const handleRollback = async (v: SpecVersion) => {
     if (!activeSpec || !window.confirm(t('rollbackConfirm', { no: v.no }))) return
     setSyncOk(null)
@@ -640,6 +646,8 @@ export default function SpecCategoryPage() {
         await Promise.all(files.map(async (f) => ({ text: await f.text(), name: f.name })))
       )
       const res = await importSpecTokensFromJson(activeSpec, parsed, { mode })
+      // 持久化导入源文件名，详情页底部展示「本地源文件」
+      await db.designSpecs.update(activeSpec.id, { jsonSourceNames: files.map((f) => f.name), updatedAt: Date.now() })
       setImportMsg({ ok: true, text: t('importDone', { no: res.versionNo, count: res.tokenCount }) })
     } catch (e) {
       setImportMsg({ ok: false, text: `${t('importFailed')}：${e instanceof Error ? e.message : String(e)}` })
@@ -681,9 +689,6 @@ export default function SpecCategoryPage() {
     return <Navigate to={`/specs/${legacySpec.categoryId}/spec/${legacySpec.id}`} replace />
   if (!category) return <Navigate to="/specs" replace />
   if (!activeSpec) return <Navigate to={`/specs/${categoryId}`} replace />
-
-  const connText =
-    connState === 'ok' ? t('connOk') : connState === 'nopat' ? t('connNoPat') : t('connNone')
 
   /** 递归渲染侧边栏文件夹树：点箭头折叠/展开，点名称过滤该文件夹（含子级），再点取消过滤 */
   const renderSideTree = (node: SideNode, depth: number, parentKey: string): ReactNode[] => {
@@ -898,17 +903,72 @@ export default function SpecCategoryPage() {
                 </div>
               )}
 
-              {/* 连接状态卡 */}
-              <div className={`specx-conn ${connState}`}>
-                <span className="specx-conn-logo" aria-hidden>
-                  DS
-                </span>
-                <div className="specx-conn-main">
-                  <b>{activeSpec.figFileName || activeSpec.name}</b>
-                  <span>{latest ? `V${latest.no} · ${tokens.length} ${t('tokensLabel')}` : t('neverSynced')}</span>
+              {/* 底部卡片跟随 tab 切换：Figma 链接 → 链接详情卡；上传 .fig → 已上传 .fig 卡；JSON 导入 → 已导入 JSON 卡（对应内容未上传时不显示） */}
+              {srcTab === 'url' && activeSpec?.figmaUrl && (
+                <div className="specx-localsrc">
+                  <div className="specx-conn local">
+                    <span className="specx-conn-logo figma" aria-hidden>
+                      <svg width="13" height="13" viewBox="0 0 38 57" fill="none">
+                        <path d="M19 28.5a9.5 9.5 0 1 1 9.5 9.5H19v-9.5Z" fill="#1ABCFE" />
+                        <path d="M0 47.5A9.5 9.5 0 0 1 9.5 38H19v9.5a9.5 9.5 0 1 1-19 0Z" fill="#0ACF83" />
+                        <path d="M19 0v19h9.5a9.5 9.5 0 1 0 0-19H19Z" fill="#FF7262" />
+                        <path d="M0 9.5A9.5 9.5 0 0 0 9.5 19H19V0H9.5A9.5 9.5 0 0 0 0 9.5Z" fill="#F24E1E" />
+                        <path d="M0 28.5A9.5 9.5 0 0 0 9.5 38H19V19H9.5A9.5 9.5 0 0 0 0 28.5Z" fill="#A259FF" />
+                      </svg>
+                    </span>
+                    <div className="specx-conn-main">
+                      <b title={activeSpec.figmaUrl}>{activeSpec.figmaUrl}</b>
+                      <span>
+                        {activeSpec.figmaFileKey
+                          ? `${t('srcLinkFile')} · ${t('srcFileKey')} ${activeSpec.figmaFileKey}`
+                          : t('srcLinkFile')}
+                      </span>
+                    </div>
+                    <span className="specx-conn-state">● {t('srcLinked')}</span>
+                  </div>
                 </div>
-                <span className="specx-conn-state">● {connText}</span>
-              </div>
+              )}
+              {srcTab === 'fig' && archiveName && (
+                <div className="specx-localsrc">
+                  <div className="specx-conn local">
+                    <span className="specx-conn-logo" aria-hidden>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 8v13H3V8" />
+                        <path d="M1 3h22v5H1z" />
+                        <path d="M10 12h4" />
+                      </svg>
+                    </span>
+                    <div className="specx-conn-main">
+                      <b title={archiveName}>{archiveName}</b>
+                      <span>{t('srcFigFile')}</span>
+                    </div>
+                    <span className="specx-conn-state">● {t('srcLocalTag')}</span>
+                    <button type="button" className="specx-conn-del" title={t('srcRemove')} onClick={handleRemoveFig}>
+                      <TrashIcon />
+                    </button>
+                  </div>
+                </div>
+              )}
+              {srcTab === 'json' && jsonNames.length > 0 && (
+                <div className="specx-localsrc">
+                  <div className="specx-conn local">
+                    <span className="specx-conn-logo" aria-hidden>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <path d="M14 2v6h6" />
+                      </svg>
+                    </span>
+                    <div className="specx-conn-main">
+                      <b title={jsonNames.join('\n')}>{jsonNames.join('、')}</b>
+                      <span>{t('srcJsonFile')}</span>
+                    </div>
+                    <span className="specx-conn-state">● {t('srcLocalTag')}</span>
+                    <button type="button" className="specx-conn-del" title={t('srcRemove')} onClick={handleRemoveJson}>
+                      <TrashIcon />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* 当前版本卡 */}

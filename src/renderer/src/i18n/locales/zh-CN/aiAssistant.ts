@@ -16,6 +16,7 @@ export default {
   copied: '已复制',
   retry: '重试',
   loadingHistory: '加载对话记录…',
+  thinking: '思考中…',
   // 输入区
   inputPlaceholder: '输入问题，@ 引用项目/页面/报告/问题，Enter 发送',
   send: '发送',

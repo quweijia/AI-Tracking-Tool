@@ -43,6 +43,13 @@ export default {
   advRunNow: 'Run structured comparison now',
   advRunning: 'Structured comparison running...',
   advRunStale: 'No data to compare yet. Run a walkthrough first.',
+  // Layered restoration scoring (incremental bypass, off by default)
+  layeredSec: 'Layered restoration scoring',
+  layeredToggle: 'Enable layered restoration scoring',
+  layeredOn: 'Turn on layered restoration scoring',
+  layeredOff: 'Turn off layered restoration scoring',
+  layeredHint:
+    'When enabled, structured comparison results classify deviations at module / element level as "absorbed" or "reported" and compute an overall restoration score. Only the summary appears in the status message; no extra issues are generated.',
   tolTitle: 'Comparison tolerance',
   tolHint: 'Tolerance only applies to the structured size comparison in advanced debug: differences below tolerance generate no issues. One global rule set; applies immediately after saving.',
   tol_size: 'Size / Position',

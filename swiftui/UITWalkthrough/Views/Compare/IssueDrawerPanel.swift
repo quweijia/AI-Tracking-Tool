@@ -370,7 +370,7 @@ struct IssueDrawerPanel: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.primary)
+        .foregroundStyle(Color.primary)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .help(collapsed.contains(cat) ? "展开该分类" : "折叠该分类")

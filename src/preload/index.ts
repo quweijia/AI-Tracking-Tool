@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { StyleNode, ToleranceConfig, MatchPair, StyleDiff, SpecSyncResult } from '../shared/types'
+import type { StyleNode, ToleranceConfig, MatchPair, StyleDiff, SpecSyncResult, LayeredRunSummary } from '../shared/types'
 
 const api = {
   saveImage: (buffer: ArrayBuffer, ext: string): Promise<string> =>
@@ -271,6 +271,8 @@ const api = {
     diffs: StyleDiff[]
     unmatchedDesignCount: number
     unmatchedDomCount: number
+    /** 分层误差旁路判定结果（分层开关开启时返回） */
+    layered?: LayeredRunSummary
   }> => ipcRenderer.invoke('walkthrough:compare', input),
   // ===== 客观走查门（ux-ui-agent-skills vendor）=====
   /** 列出全部可用 gate（名称 / 是否需浏览器 / 测量内容） */

@@ -5,14 +5,15 @@ import SwiftUI
 struct SettingsView: View {
     var body: some View {
         ScrollView {
-            VStack(spacing: 14) {
+            VStack(spacing: Spacing.xl) {
                 ModelsSection()
                 GeneralSection()
                 AppAuthSection()
             }
-            .padding(20)
+            .padding(Spacing.xlg2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.appBg)
     }
 }
 
@@ -22,10 +23,10 @@ private struct GeneralSection: View {
     @State private var soundEnabled = true
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
+        AppCard {
+            VStack(alignment: .leading, spacing: Spacing.md) {
                 Text("通用")
-                    .font(.headline)
+                    .font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold))
                 Toggle("任务完成音效", isOn: $soundEnabled)
                     .onChange(of: soundEnabled) {
                         var cfg = AppConfigStore.load()
@@ -33,11 +34,11 @@ private struct GeneralSection: View {
                         AppConfigStore.save(cfg)
                     }
                 Text("AI 识别任务完成后播放提示音，关闭后静默")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: FontTokens.Size.captionSmall))
+                    .foregroundStyle(Color.textSecondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
+            .padding(.vertical, Spacing.xxs)
         }
         .onAppear {
             soundEnabled = AppConfigStore.load().soundEnabled != false
@@ -49,8 +50,8 @@ private struct GeneralSection: View {
 
 private struct AppAuthSection: View {
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 14) {
+        AppCard {
+            VStack(alignment: .leading, spacing: Spacing.xlg) {
                 FeishuAuthCard()
                 Divider()
                 TencentAuthCard()
@@ -58,7 +59,7 @@ private struct AppAuthSection: View {
                 KingsoftAuthCard()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
+            .padding(.vertical, Spacing.xxs)
         }
     }
 }
@@ -78,19 +79,19 @@ private struct AuthCardLayout<Fields: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Spacing.md) {
             HStack {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: FontTokens.Size.bodySmall, weight: .semibold))
                 Spacer()
                 Text(savedLabel)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: FontTokens.Size.captionSmall))
+                    .foregroundStyle(Color.textSecondary)
             }
             Text(desc)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            HStack(alignment: .top, spacing: 10) {
+                .font(.system(size: FontTokens.Size.captionSmall))
+                .foregroundStyle(Color.textSecondary)
+            HStack(alignment: .top, spacing: Spacing.mg) {
                 fields()
             }
         }
@@ -133,27 +134,26 @@ private struct FeishuAuthCard: View {
             desc: "使用飞书自建应用凭据（需开通云文档权限），用于一键将走查报告创建为飞书文档。",
             savedLabel: hasSaved ? "已保存" : "未配置",
             fields: {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("App ID").font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    AppFieldLabel(text: "App ID")
                     TextField("App ID（cli_xxx）", text: $appId)
-                        .textFieldStyle(.roundedBorder)
+                        .appInputStyle()
                         .frame(width: 240)
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("App Secret").font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    AppFieldLabel(text: "App Secret")
                     SecureField("App Secret", text: $appSecret)
-                        .textFieldStyle(.roundedBorder)
+                        .appInputStyle()
                         .frame(width: 240)
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(" ").font(.caption)
-                    HStack(spacing: 8) {
-                        Button(testing ? "测试中..." : "测试连接") { test() }
-                            .disabled(testing || !hasSaved)
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text(" ").font(.system(size: FontTokens.Size.captionSmall)).foregroundStyle(Color.textSecondary)
+                    HStack(spacing: Spacing.md) {
+                        AppButton(testing ? "测试中..." : "测试连接", icon: nil, style: .secondary, isLoading: testing, isDisabled: testing || !hasSaved) { test() }
                         if let msg = testMsg {
                             Text(msg.text)
-                                .font(.caption)
-                                .foregroundStyle(msg.ok ? Color.green : Color.red)
+                                .font(.system(size: FontTokens.Size.captionSmall))
+                                .foregroundStyle(msg.ok ? Color.success : Color.danger)
                                 .lineLimit(2)
                         }
                     }
@@ -214,33 +214,32 @@ private struct TencentAuthCard: View {
             desc: "填写腾讯文档开放平台「开发者信息」（应用 ID client_id / access_token / open_id），用于一键将走查报告创建为腾讯文档。",
             savedLabel: hasSaved ? "已保存" : "未配置",
             fields: {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("应用 ID（client_id）").font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    AppFieldLabel(text: "应用 ID（client_id）")
                     TextField("应用 ID（client_id）", text: $clientId)
-                        .textFieldStyle(.roundedBorder)
+                        .appInputStyle()
                         .frame(width: 200)
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("access_token").font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    AppFieldLabel(text: "access_token")
                     SecureField("access_token", text: $accessToken)
-                        .textFieldStyle(.roundedBorder)
+                        .appInputStyle()
                         .frame(width: 200)
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("open_id").font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    AppFieldLabel(text: "open_id")
                     TextField("open_id", text: $openId)
-                        .textFieldStyle(.roundedBorder)
+                        .appInputStyle()
                         .frame(width: 200)
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(" ").font(.caption)
-                    HStack(spacing: 8) {
-                        Button(testing ? "测试中..." : "测试连接") { test() }
-                            .disabled(testing || !hasSaved)
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text(" ").font(.system(size: FontTokens.Size.captionSmall)).foregroundStyle(Color.textSecondary)
+                    HStack(spacing: Spacing.md) {
+                        AppButton(testing ? "测试中..." : "测试连接", icon: nil, style: .secondary, isLoading: testing, isDisabled: testing || !hasSaved) { test() }
                         if let msg = testMsg {
                             Text(msg.text)
-                                .font(.caption)
-                                .foregroundStyle(msg.ok ? Color.green : Color.red)
+                                .font(.system(size: FontTokens.Size.captionSmall))
+                                .foregroundStyle(msg.ok ? Color.success : Color.danger)
                                 .lineLimit(2)
                         }
                     }
@@ -296,27 +295,26 @@ private struct KingsoftAuthCard: View {
             desc: "填写金山文档开放平台 App ID / App Secret，用于一键将走查报告创建为金山文档。",
             savedLabel: hasSaved ? "已保存" : "未配置",
             fields: {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("App ID").font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    AppFieldLabel(text: "App ID")
                     TextField("App ID", text: $appId)
-                        .textFieldStyle(.roundedBorder)
+                        .appInputStyle()
                         .frame(width: 240)
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("App Secret").font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    AppFieldLabel(text: "App Secret")
                     SecureField("App Secret", text: $appSecret)
-                        .textFieldStyle(.roundedBorder)
+                        .appInputStyle()
                         .frame(width: 240)
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(" ").font(.caption)
-                    HStack(spacing: 8) {
-                        Button(testing ? "测试中..." : "测试连接") { test() }
-                            .disabled(testing || !hasSaved)
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text(" ").font(.system(size: FontTokens.Size.captionSmall)).foregroundStyle(Color.textSecondary)
+                    HStack(spacing: Spacing.md) {
+                        AppButton(testing ? "测试中..." : "测试连接", icon: nil, style: .secondary, isLoading: testing, isDisabled: testing || !hasSaved) { test() }
                         if let msg = testMsg {
                             Text(msg.text)
-                                .font(.caption)
-                                .foregroundStyle(msg.ok ? Color.green : Color.red)
+                                .font(.system(size: FontTokens.Size.captionSmall))
+                                .foregroundStyle(msg.ok ? Color.success : Color.danger)
                                 .lineLimit(2)
                         }
                     }
@@ -371,40 +369,40 @@ private struct ModelsSection: View {
     }
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 4) {
+        AppCard {
+            VStack(alignment: .leading, spacing: Spacing.mg) {
+                VStack(alignment: .leading, spacing: Spacing.xxs) {
                     HStack {
                         Text("模型列表")
-                            .font(.headline)
+                            .font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold))
                         Spacer()
-                        Button("＋ 添加模型") { showNew = true }
+                        AppButton("添加模型", icon: "plus", style: .primary) { showNew = true }
                     }
                     Text("配置 OpenAI 兼容协议的多模态模型，用于 AI 自动识别走查问题。Key 仅保存在本机配置文件中。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: FontTokens.Size.captionSmall))
+                        .foregroundStyle(Color.textSecondary)
                 }
                 HStack {
                     if loaded {
                         Text("共 \(models.count) 个模型")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: FontTokens.Size.captionSmall))
+                            .foregroundStyle(Color.textSecondary)
                     }
                     Spacer()
                 }
                 if loaded && models.isEmpty {
                     Text("还没有模型配置，点击「添加模型」开始")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: FontTokens.Size.bodySmall))
+                        .foregroundStyle(Color.textSecondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 6)
+                        .padding(.vertical, Spacing.sm)
                 }
                 ForEach(models) { m in
                     modelRow(m)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
+            .padding(.vertical, Spacing.xxs)
         }
         .onAppear {
             let cfg = AppConfigStore.load()
@@ -438,78 +436,68 @@ private struct ModelsSection: View {
     }
 
     private func modelRow(_ m: AIModelConfig) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            HStack(spacing: Spacing.xxs) {
                 Text(m.name)
-                    .font(.callout)
+                    .font(.system(size: FontTokens.Size.bodySmall))
                     .fontWeight(.medium)
                 if m.id == defaultId {
-                    badge("默认", background: Color.accentColor.opacity(0.14), foreground: .accentColor)
+                    badge("默认", background: Color.primary.opacity(0.14), foreground: Color.primary)
                 }
                 if m.vision {
-                    badge("图像输入", background: Color.green.opacity(0.14), foreground: .green)
+                    badge("图像输入", background: Color.success.opacity(0.14), foreground: Color.success)
                 } else {
-                    badge("纯文本", background: Color(nsColor: .quaternaryLabelColor), foreground: .secondary)
+                    badge("纯文本", background: Color.fill, foreground: Color.textSecondary)
                 }
                 Spacer()
             }
             Text("\(m.model) · \(m.baseUrl)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.system(size: FontTokens.Size.captionSmall))
+                .foregroundStyle(Color.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
             if let msg = testMsg[m.id] {
                 Text(msg.text)
-                    .font(.caption)
-                    .foregroundStyle(msg.ok ? Color.green : Color.red)
+                    .font(.system(size: FontTokens.Size.captionSmall))
+                    .foregroundStyle(msg.ok ? Color.success : Color.danger)
             }
-            HStack(spacing: 10) {
+            HStack(spacing: Spacing.lg) {
                 if m.id != defaultId {
-                    Button {
+                    AppButton("设为默认", icon: "star", style: .text) {
                         persistModels(models, nextDefault: m.id)
-                    } label: {
-                        Label("设为默认", systemImage: "star")
                     }
-                    .controlSize(.small)
                 }
-                Button {
+                AppButton(
+                    testingId == m.id ? "测试中..." : "测试连接",
+                    icon: testingId == m.id ? nil : "bolt.horizontal",
+                    style: .text,
+                    isLoading: testingId == m.id,
+                    isDisabled: testingId == m.id
+                ) {
                     testModel(m.id)
-                } label: {
-                    if testingId == m.id {
-                        HStack(spacing: 4) {
-                            ProgressView().controlSize(.mini)
-                            Text("测试中...")
-                        }
-                    } else {
-                        Label("测试连接", systemImage: "bolt.horizontal")
-                    }
                 }
-                .controlSize(.small)
-                .disabled(testingId == m.id)
-                Button("编辑") { editing = m }
-                    .controlSize(.small)
-                Button("删除", role: .destructive) { deleting = m }
-                    .controlSize(.small)
+                AppButton("编辑", style: .text) { editing = m }
+                AppButton("删除", style: .destructive) { deleting = m }
                 Spacer()
             }
         }
-        .padding(10)
+        .padding(SizeTokens.cardPaddingCompact)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(m.id == defaultId ? Color.accentColor.opacity(0.05) : Color(nsColor: .controlBackgroundColor))
+            RoundedRectangle(cornerRadius: Radius.sm)
+                .fill(m.id == defaultId ? Color.primary.opacity(0.05) : Color.cardBg)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(m.id == defaultId ? Color.accentColor.opacity(0.4) : Color(nsColor: .separatorColor))
+            RoundedRectangle(cornerRadius: Radius.sm)
+                .strokeBorder(m.id == defaultId ? Color.primary.opacity(0.4) : Color.border)
         )
     }
 
     private func badge(_ text: String, background: Color, foreground: Color) -> some View {
         Text(text)
-            .font(.caption2)
+            .font(.system(size: FontTokens.Size.caption))
             .foregroundStyle(foreground)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, Spacing.xs)
             .background(Capsule().fill(background))
     }
 }
@@ -546,61 +534,62 @@ private struct ModelModal: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Spacing.mg) {
             Text(initial == nil ? "添加模型" : "编辑模型")
-                .font(.headline)
+                .font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold))
 
             Text("快捷模板（OpenAI 兼容协议）")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            HStack(spacing: 6) {
+                .font(.system(size: FontTokens.Size.captionSmall))
+                .foregroundStyle(Color.textSecondary)
+            HStack(spacing: Spacing.sm) {
                 ForEach(Self.presets, id: \.key) { p in
                     Button {
                         applyPreset(p.key)
                     } label: {
                         Text(p.label)
-                            .font(.caption)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
+                            .font(.system(size: FontTokens.Size.captionSmall))
+                            .padding(.horizontal, Spacing.mg)
+                            .padding(.vertical, Spacing.xxs)
+                            .foregroundStyle(preset == p.key ? Color.primary : Color.textSecondary)
                             .background(
-                                Capsule().fill(preset == p.key ? Color.accentColor.opacity(0.16) : Color(nsColor: .controlBackgroundColor))
+                                Capsule().fill(preset == p.key ? Color.primarySoft : Color.cardBg)
                             )
                             .overlay(
-                                Capsule().strokeBorder(preset == p.key ? Color.accentColor : Color(nsColor: .separatorColor))
+                                Capsule().strokeBorder(preset == p.key ? Color.primary : Color.border)
                             )
                     }
                     .buttonStyle(.plain)
                 }
             }
 
-            fieldLabel("名称")
+            AppFieldLabel(text: "名称")
             TextField("如：DeepSeek 视觉", text: $name)
-                .textFieldStyle(.roundedBorder)
+                .appInputStyle()
 
-            fieldLabel("Base URL")
+            AppFieldLabel(text: "Base URL")
             TextField("如：https://api.deepseek.com/v1", text: $baseUrl)
-                .textFieldStyle(.roundedBorder)
+                .appInputStyle()
 
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    fieldLabel("模型 ID")
+            HStack(alignment: .top, spacing: Spacing.xlg) {
+                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                    AppFieldLabel(text: "模型 ID")
                     TextField("如：gpt-4o", text: $model)
-                        .textFieldStyle(.roundedBorder)
+                        .appInputStyle()
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    fieldLabel("API Key")
+                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                    AppFieldLabel(text: "API Key")
                     SecureField("sk-...", text: $apiKey)
-                        .textFieldStyle(.roundedBorder)
+                        .appInputStyle()
                 }
             }
 
             Toggle("支持图像输入（走查识别必须勾选多模态模型）", isOn: $vision)
-                .font(.callout)
+                .font(.system(size: FontTokens.Size.bodySmall))
 
             HStack {
                 Spacer()
-                Button("取消") { dismiss() }
-                Button("保存") {
+                AppButton("取消", style: .secondary) { dismiss() }
+                AppButton("保存", style: .primary, isDisabled: !canSave) {
                     guard canSave else { return }
                     var trimmedUrl = baseUrl.trimmingCharacters(in: .whitespaces)
                     while trimmedUrl.hasSuffix("/") { trimmedUrl.removeLast() }
@@ -616,10 +605,9 @@ private struct ModelModal: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!canSave)
             }
         }
-        .padding(18)
+        .padding(Spacing.xxl)
         .frame(width: 480)
         .onAppear {
             if let initial {
@@ -632,12 +620,6 @@ private struct ModelModal: View {
         }
     }
 
-    private func fieldLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-    }
-
     /// 应用预设：填充 Base URL / 模型名；名称为空时带上预设名（对齐 applyPreset）
     private func applyPreset(_ key: String) {
         preset = key
@@ -646,6 +628,24 @@ private struct ModelModal: View {
         model = p.model
         if name.isEmpty { name = p.label }
         vision = true
+    }
+}
+
+// MARK: - SecureField 扩展：应用 AppInput 样式
+
+extension View {
+    /// 为 SecureField / TextField 添加 AppInput 一致的样式（padding + border + focus ring）
+    @ViewBuilder
+    func appInputStyle() -> some View {
+        self
+            .font(.system(size: FontTokens.Size.bodySmall))
+            .padding(.horizontal, SizeTokens.inputPaddingH)
+            .padding(.vertical, SizeTokens.inputPaddingV)
+            .background(Color.cardBg, in: RoundedRectangle(cornerRadius: Radius.sm))
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.sm)
+                    .strokeBorder(Color.inputBorder, lineWidth: 1)
+            )
     }
 }
 

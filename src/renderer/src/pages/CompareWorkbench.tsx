@@ -6,7 +6,7 @@ import { db, genId, recordVisit, touchPage, Issue, Category, Severity, TargetIma
 import AnnotationCanvas, { NormalizedRect } from '../components/AnnotationCanvas'
 import AutoWalkPanel from '../components/AutoWalkPanel'
 import EditPageModal from '../components/EditPageModal'
-import ProjectModal from '../components/ProjectModal'
+import BindSpecModal from '../components/BindSpecModal'
 import IssueEditorModal from '../components/IssueEditorModal'
 import IssueDrawer from '../components/IssueDrawer'
 import ReverifyModal from '../components/ReverifyModal'
@@ -216,14 +216,26 @@ export default function CompareWorkbench() {
   const [focusIssue, setFocusIssue] = useState<Issue | null>(null)
   /** 编辑页面信息弹窗 */
   const [editPageOpen, setEditPageOpen] = useState(false)
-  /** 绑定规范弹窗（复用项目编辑弹窗，内含按端分类的规范绑定选择器） */
+  /** 绑定规范弹窗（仅绑定规范，按当前页面端类型显示分类；项目编辑在项目详情页进行） */
   const [bindSpecOpen, setBindSpecOpen] = useState(false)
+  /** 设计规范菜单开关（设置页「通用」控制，关闭后横幅不显示「绑定规范」按钮；默认开启） */
+  const [specMenuOn, setSpecMenuOn] = useState(true)
   /** 编辑中的已有问题 / 新建草稿（null = 弹窗关闭） */
   const [editingIssue, setEditingIssue] = useState<Issue | null>(null)
 
   /** 标注撤销/重做历史栈（手动标注的新增/删除/编辑共用，切页清空） */
   const [undoStack, setUndoStack] = useState<HistoryOp[]>([])
   const [redoStack, setRedoStack] = useState<HistoryOp[]>([])
+
+  // 设计规范菜单开关联动：初次读取 config，设置页切换后经 spec-menu-change 事件即时同步（与侧边栏同一机制）
+  useEffect(() => {
+    const refresh = () => {
+      void window.electronAPI.getConfig().then((cfg) => setSpecMenuOn(cfg.specMenuEnabled !== false))
+    }
+    refresh()
+    window.addEventListener('spec-menu-change', refresh)
+    return () => window.removeEventListener('spec-menu-change', refresh)
+  }, [])
 
   /** 在标注图上高亮闪烁指定标注（重复点击重置计时），并进入/退出聚焦查看 */
   const handleFlash = (issue: Issue) => {
@@ -280,6 +292,8 @@ export default function CompareWorkbench() {
   /** AI 识别前的技能选择弹窗（可多选） */
   const [skillPickOpen, setSkillPickOpen] = useState(false)
   const [pickedSkillIds, setPickedSkillIds] = useState<string[]>([])
+  /** 已有识别进行中再次点击按钮的确认弹窗（继续 / 中断 / 重新开始） */
+  const [runningConfirmOpen, setRunningConfirmOpen] = useState(false)
 
   useEffect(() => {
     window.electronAPI.getConfig().then((cfg) => {
@@ -718,6 +732,15 @@ export default function CompareWorkbench() {
   }
 
   // ===== AI 自动识别走查问题（skillIds：弹窗多选的技能）；可并行发起多个任务 =====
+
+  /** 中断当前页面所有进行中的识别任务（等待中的识别结果将被丢弃） */
+  const interruptPageTasks = () => {
+    useAiTasksStore
+      .getState()
+      .tasks.filter((t) => t.pageId === pageId && t.status === 'running')
+      .forEach((t) => useAiTasksStore.getState().interrupt(t.id))
+  }
+
   const runAIAnnotate = async (skillIds: string[] = []) => {
     if (!pageId || !aiModel) return
     // 分模式取图：手动标注识别手动上传双图；自动走查识别自动采集的走查双图
@@ -872,7 +895,7 @@ export default function CompareWorkbench() {
           <button
             ref={aiBtnGlowRef}
             className={`btn-secondary btn-ai${aiRunningCount ? ' loading' : ''}`}
-            onClick={() => setSkillPickOpen(true)}
+            onClick={() => (aiRunningCount ? setRunningConfirmOpen(true) : setSkillPickOpen(true))}
             disabled={!aiModel || (workMode === 'manual' && (!designUrl || !shotUrl))}
             title={
               !aiModel
@@ -892,8 +915,8 @@ export default function CompareWorkbench() {
               ? aiTasks.find((t) => t.status === 'running' && t.pageId === pageId)?.message ?? t('aiRunning')
               : t('aiRecognize')}
           </button>
-          {/* 绑定规范：复用项目编辑弹窗（内含按端分类的规范绑定选择器），置于问题清单左侧 */}
-          {project && (
+          {/* 绑定规范：复用项目编辑弹窗（内含按端分类的规范绑定选择器），置于问题清单左侧；设置页关闭设计规范菜单后隐藏 */}
+          {project && specMenuOn && (
             <button className="btn-secondary" onClick={() => setBindSpecOpen(true)}>
               <SpecIcon />
               {t('bindSpec')}
@@ -917,8 +940,20 @@ export default function CompareWorkbench() {
 
       {aiMsg && (
         <p className={`ai-msg ${aiMsg.ok ? 'ok' : 'err'}`}>
-          {aiMsg.ok ? '✓ ' : '✕ '}
-          {aiMsg.text}
+          {/* 前缀与正文包进同一 span，关闭按钮 flex 右贴边垂直居中 */}
+          <span>
+            {aiMsg.ok ? '✓ ' : '✕ '}
+            {aiMsg.text}
+          </span>
+          {/* 识别完成/失败通知条支持手动关闭 */}
+          <button
+            type="button"
+            className="auto-walk-msg-close"
+            aria-label={t('close')}
+            onClick={() => setAiMsg(null)}
+          >
+            ×
+          </button>
         </p>
       )}
 
@@ -1334,9 +1369,14 @@ export default function CompareWorkbench() {
         />
       )}
 
-      {/* 绑定规范：复用项目编辑弹窗 */}
-      {bindSpecOpen && project && (
-        <ProjectModal project={project} onDone={() => setBindSpecOpen(false)} onCancel={() => setBindSpecOpen(false)} />
+      {/* 绑定规范：仅绑定规范弹窗（只显示当前页面端类型的规范分类，不含项目编辑项） */}
+      {bindSpecOpen && page && (
+        <BindSpecModal
+          projectId={projectId!}
+          platform={page.platform}
+          onDone={() => setBindSpecOpen(false)}
+          onCancel={() => setBindSpecOpen(false)}
+        />
       )}
 
       {skillPickOpen && (
@@ -1348,6 +1388,21 @@ export default function CompareWorkbench() {
             setPickedSkillIds(ids)
             setSkillPickOpen(false)
             void runAIAnnotate(ids)
+          }}
+        />
+      )}
+
+      {runningConfirmOpen && (
+        <RunningConfirmModal
+          onContinue={() => setRunningConfirmOpen(false)}
+          onInterrupt={() => {
+            interruptPageTasks()
+            setRunningConfirmOpen(false)
+          }}
+          onRestart={() => {
+            interruptPageTasks()
+            setRunningConfirmOpen(false)
+            setSkillPickOpen(true)
           }}
         />
       )}
@@ -1416,6 +1471,48 @@ function SkillPickModal({
           </button>
           <button className="btn-primary" onClick={() => onConfirm(picked)}>
             {picked.length ? t('startWalkthrough') : t('walkWithoutSkill')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** 识别进行中再次点击的确认弹窗：继续（关闭弹窗等待结果）/ 中断当前任务 / 中断并重新开始 */
+function RunningConfirmModal({
+  onContinue,
+  onInterrupt,
+  onRestart
+}: {
+  onContinue: () => void
+  onInterrupt: () => void
+  onRestart: () => void
+}) {
+  const { t } = useTranslation('compareWorkbench')
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onContinue()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onContinue])
+
+  return (
+    <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && onContinue()}>
+      <div className="modal">
+        <h3>{t('aiRunningDialogTitle')}</h3>
+        <p className="settings-desc">{t('aiRunningDialogDesc')}</p>
+        <div className="modal-actions">
+          <span className="modal-spacer" />
+          <button className="btn-secondary" onClick={onContinue}>
+            {t('aiRunningContinue')}
+          </button>
+          <button className="btn-danger" onClick={onInterrupt}>
+            {t('aiRunningInterrupt')}
+          </button>
+          <button className="btn-primary" onClick={onRestart}>
+            {t('aiRunningRestart')}
           </button>
         </div>
       </div>

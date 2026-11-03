@@ -23,7 +23,13 @@ import { registerBrowserHandlers } from './browserWindow'
 import { registerGateHandlers } from './gates'
 import { matchNodes } from './matcher'
 import { computeDiffs } from './diff'
-import { normalizeTolerance } from '../shared/types'
+import { computeLayered } from './layered'
+import {
+  LAYERED_TOLERANCE_KEY,
+  normalizeLayeredTolerance,
+  normalizeTolerance
+} from '../shared/types'
+import type { LayeredToleranceConfig } from '../shared/types'
 
 const MIME: Record<string, string> = {
   png: 'image/png',
@@ -303,7 +309,12 @@ export function registerIpcHandlers(): void {
       const tolerance = normalizeTolerance(input.tolerance)
       const { pairs, unmatchedDesignCount, unmatchedDomCount } = matchNodes(designRoot, domRoot)
       const diffs = computeDiffs(pairs, tolerance, viewport, input.includeSizeSpacing !== false)
-      return { ok: true, pairs, diffs, unmatchedDesignCount, unmatchedDomCount }
+      // 分层误差旁路（v3）：开关关闭时不参与计算，返回值缺省 layered 字段，行为与现状一致
+      const layeredCfg = normalizeLayeredTolerance(
+        getConfigData()[LAYERED_TOLERANCE_KEY] as Partial<LayeredToleranceConfig> | undefined
+      )
+      const layered = layeredCfg.enabled ? computeLayered(pairs, layeredCfg, viewport) : undefined
+      return { ok: true, pairs, diffs, unmatchedDesignCount, unmatchedDomCount, layered }
     }
   )
 

@@ -216,8 +216,105 @@ function extractJson(text: string): { issues?: unknown } {
 
 const clamp01 = (v: unknown): number => Math.min(1, Math.max(0, Number(v) || 0))
 
-/** 校验并归一化模型输出的标注候选 */
-function normalizeIssues(raw: unknown): AIAnnotation[] {
+/** 从 dataUrl 解析图片真实像素尺寸（PNG 读 IHDR / JPEG 扫 SOF 段；解析失败返回 null） */
+function getImageSizeFromDataUrl(dataUrl: string): { width: number; height: number } | null {
+  try {
+    const buf = Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64')
+    // PNG：8 字节签名（0x89504E47…），IHDR 块内大端宽高固定在 16/20 偏移
+    if (buf.length >= 24 && buf.readUInt32BE(0) === 0x89504e47) {
+      return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
+    }
+    // JPEG：FFD8 开头，逐段扫描 SOF0~SOF15（排除 DHT/DAC/JPG 等非帧头段）
+    if (buf.length >= 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+      let off = 2
+      while (off + 9 < buf.length) {
+        if (buf[off] !== 0xff) {
+          off++
+          continue
+        }
+        const marker = buf[off + 1]
+        if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+          return { height: buf.readUInt16BE(off + 5), width: buf.readUInt16BE(off + 7) }
+        }
+        off += 2 + buf.readUInt16BE(off + 2)
+      }
+    }
+  } catch {
+    // 非法 dataUrl 走 null 兜底
+  }
+  return null
+}
+
+/** 传给模型的图片信息：原图尺寸 / 发送尺寸 / 坐标反向映射系数 */
+interface ModelImageInfo {
+  dataUrl: string
+  origW: number
+  origH: number
+  sentW: number
+  sentH: number
+  /** scale = 原图宽 ÷ 发送宽：模型图片像素 × scale = 原始画布像素（降采样时 > 1） */
+  scale: number
+}
+
+/**
+ * 图片预处理（阶段1）：解析图片像素尺寸并记录 scale。
+ * 当前恒等直传原图（sent = orig，scale = 1，坐标天然对齐）；
+ * 阶段2 接入降采样只改本函数，模型 bbox × scale 的反向换算链路自动生效。
+ */
+function prepareModelImage(dataUrl: string, label: string): ModelImageInfo {
+  const size = getImageSizeFromDataUrl(dataUrl)
+  const info: ModelImageInfo = {
+    dataUrl,
+    origW: size?.width ?? 0,
+    origH: size?.height ?? 0,
+    sentW: size?.width ?? 0,
+    sentH: size?.height ?? 0,
+    scale: 1
+  }
+  if (size) {
+    console.log(
+      `[ai-coord] ${label}: 原图 ${info.origW}x${info.origH}px，传给模型 ${info.sentW}x${info.sentH}px，scale=${info.scale}`
+    )
+  } else {
+    console.warn(`[ai-coord] ${label}: 图片尺寸解析失败，坐标按旧归一化格式兼容处理`)
+  }
+  return info
+}
+
+/** 模型输出的像素 bbox（x1,y1=左上角，x2,y2=右下角，基于传给模型的图片坐标系） */
+interface PixelBbox {
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+/**
+ * 坐标转换函数（阶段1核心）：模型像素 bbox × scale 反向映射回原始截图画布像素，
+ * 再 ÷ 原图宽高得到归一化坐标（0~1）。渲染层按归一化百分比绘制，
+ * 与画布显示尺寸 / devicePixelRatio / 预览容器缩放天然无关。
+ */
+function mapBboxToNormalized(
+  b: PixelBbox,
+  img: ModelImageInfo
+): { x: number; y: number; width: number; height: number } {
+  const ox1 = b.x1 * img.scale
+  const oy1 = b.y1 * img.scale
+  const ox2 = b.x2 * img.scale
+  const oy2 = b.y2 * img.scale
+  return {
+    x: clamp01(ox1 / img.origW),
+    y: clamp01(oy1 / img.origH),
+    width: clamp01((ox2 - ox1) / img.origW),
+    height: clamp01((oy2 - oy1) / img.origH)
+  }
+}
+
+/** 校验并归一化模型输出的标注候选（坐标字段兼容新旧两种格式） */
+function normalizeIssues(
+  raw: unknown,
+  imgs: { design: ModelImageInfo; shot: ModelImageInfo }
+): AIAnnotation[] {
   if (!Array.isArray(raw)) return []
   const out: AIAnnotation[] = []
   for (const item of raw) {
@@ -228,15 +325,53 @@ function normalizeIssues(raw: unknown): AIAnnotation[] {
     const shape = SHAPES.includes(String(o.shape)) ? (String(o.shape) as AIAnnotation['shape']) : 'rect'
     // 点位/文字/吸色只保留坐标点，宽高置 0；测量保留宽高矢量
     const zeroDims = shape === 'point' || shape === 'text' || shape === 'picker'
+    const targetImage = o.targetImage === 'design' ? 'design' : 'screenshot'
+    const img = targetImage === 'design' ? imgs.design : imgs.shot
+    const n = (v: unknown): number => Number(v)
+    // 新格式判别：x1/y1/x2/y2 均为有限数 → 像素坐标，按 scale 反向映射
+    const hasPixelBbox =
+      Number.isFinite(n(o.x1)) && Number.isFinite(n(o.y1)) && Number.isFinite(n(o.x2)) && Number.isFinite(n(o.y2))
+    let box: { x: number; y: number; width: number; height: number }
+    if (hasPixelBbox && img.sentW > 0 && img.origW > 0) {
+      // 容错：模型可能交换左上/右下角，统一按 min/max 归位（measure 保留矢量方向）
+      const keepSign = shape === 'measure'
+      const bx1 = n(o.x1)
+      const by1 = n(o.y1)
+      const bx2 = n(o.x2)
+      const by2 = n(o.y2)
+      const b: PixelBbox = {
+        x1: keepSign ? bx1 : Math.min(bx1, bx2),
+        y1: keepSign ? by1 : Math.min(by1, by2),
+        x2: keepSign ? bx2 : Math.max(bx1, bx2),
+        y2: keepSign ? by2 : Math.max(by1, by2)
+      }
+      box = mapBboxToNormalized(b, img)
+      console.log(
+        `[ai-coord] #${out.length + 1} ${targetImage}/${shape} 模型bbox(px)=(${b.x1},${b.y1})~(${b.x2},${b.y2}) → ×scale=${img.scale} → 原图画布px=(${(b.x1 * img.scale).toFixed(0)},${(b.y1 * img.scale).toFixed(0)})~(${(b.x2 * img.scale).toFixed(0)},${(b.y2 * img.scale).toFixed(0)}) → 归一化=(x=${box.x.toFixed(4)}, y=${box.y.toFixed(4)}, w=${box.width.toFixed(4)}, h=${box.height.toFixed(4)})`
+      )
+      if (zeroDims) box = { x: box.x, y: box.y, width: 0, height: 0 }
+    } else {
+      // 旧格式兼容：x,y,width,height 已是 0~1 归一化坐标
+      box = {
+        x: clamp01(o.x),
+        y: clamp01(o.y),
+        width: zeroDims ? 0 : clamp01(o.width),
+        height: zeroDims ? 0 : clamp01(o.height)
+      }
+      console.log(
+        `[ai-coord] #${out.length + 1} ${targetImage}/${shape} 旧归一化格式=(x=${box.x.toFixed(4)}, y=${box.y.toFixed(4)}, w=${box.width.toFixed(4)}, h=${box.height.toFixed(4)})`
+      )
+    }
     const sug = (o.suggestion ?? {}) as Record<string, unknown>
     out.push({
-      targetImage: o.targetImage === 'design' ? 'design' : 'screenshot',
+      targetImage,
       shape,
-      x: clamp01(o.x),
-      y: clamp01(o.y),
-      width: zeroDims ? 0 : clamp01(o.width),
-      height: zeroDims ? 0 : clamp01(o.height),
-      description: description.slice(0, 200),
+      x: box.x,
+      y: box.y,
+      width: box.width,
+      height: box.height,
+      // 240 = 原 200 上限 + 末尾命中技能标注【命中技能：技能名称】的预留空间（模块2/3 依赖标注完整）
+      description: description.slice(0, 240),
       severity: SEVERITIES.includes(String(o.severity))
         ? (String(o.severity) as AIAnnotation['severity'])
         : 'minor',
@@ -272,15 +407,15 @@ const SYSTEM_PROMPT = `你是资深 UI 设计师，正在对开发实现页面�
 6. 排版：多行文本行高拥挤或过松、标题层级视觉错乱（该大的不大、该粗的不粗）
 
 严格只输出一个 JSON 对象，不要任何解释文字，格式：
-{"issues":[{"targetImage":"screenshot","shape":"rect","x":0.1,"y":0.2,"width":0.3,"height":0.05,"description":"主按钮文案被截断，末尾缺少省略号","severity":"major","category":"typography","suggestion":{"current":"按钮文字显示不全","fix":"检查按钮宽度或文字截断规则","properties":"text-overflow"}}]}
+{"issues":[{"targetImage":"screenshot","shape":"rect","x1":412,"y1":88,"x2":640,"y2":132,"description":"主按钮文案被截断，末尾缺少省略号","severity":"major","category":"typography","suggestion":{"current":"按钮文字显示不全","fix":"检查按钮宽度或文字截断规则","properties":"text-overflow"}}]}
 字段要求：
-- targetImage：标注画在哪张图上。"screenshot"=开发截图（多数问题标在这里），"design"=设计稿（元素缺失、新增元素等，在设计稿上框选）。两张图尺寸可能不同，坐标相对各自图片独立计算
+- targetImage：标注画在哪张图上。"screenshot"=开发截图（多数问题标在这里），"design"=设计稿（元素缺失、新增元素等，在设计稿上框选）。两张图尺寸可能不同，坐标相对各自图片独立计算（用户消息中标注了每张图的像素尺寸）
 - shape 按问题类型选择：
   * "rect"：框选问题元素（文字问题、图标图片、缺失/多余元素、组件状态、排版问题都用 rect）
-  * "measure"：间距明显过大/过小时标注间距区间。x,y=起点，width,height=到终点的矢量（垂直间距 width=0，水平间距 height=0）
-  * "picker"：颜色明显偏差。x,y=取色点，width/height=0
-  * "point"：对齐错位等无明显边界的问题。x,y=问题位置中心点，width/height=0
-- x,y,width,height：归一化坐标（0~1），相对所在图片左上角。先定位问题元素的边界，再除以图片宽高换算；框必须紧贴问题元素
+  * "measure"：间距明显过大/过小时标注间距区间。x1,y1=间距起点，x2,y2=间距终点（垂直间距 x1=x2，水平间距 y1=y2）
+  * "picker"：颜色明显偏差。x1=y1=x2=y2=取色点
+  * "point"：对齐错位等无明显边界的问题。x1=y1=x2=y2=问题位置中心点
+- x1,y1,x2,y2：整数像素坐标，必须基于对应输入图片的像素坐标系（原点在图片左上角，x 向右、y 向下；x1,y1=左上角，x2,y2=右下角），禁止用自然语言描述位置、禁止输出 0~1 小数坐标。框必须紧贴问题元素的可见边界，不要把框画得比元素大很多或偏移到相邻元素
 - description：一句话中文问题描述，站在设计师视角说清「哪里、和设计稿相比怎么了」
 - severity：major=明显影响视觉/可用，必须改；minor=一般差异，应该改；suggestion=可优化的细节
 - category：typography=文字类与排版 / spacing=对齐布局与间距 / color=色彩 / style=图标图片与组件状态样式 / interaction=交互状态缺失（如 hover/禁用/报错态）/ compatibility=适配异常。按问题最贴切的一项选择
@@ -332,6 +467,59 @@ ${wo.specSummary}
 - 规范问题与设计稿差异问题为同一处时只输出一条，避免重复标注`
 }
 
+/** 单技能条目长度上限：优先保留技能名称与核心规则，长说明/参考链接依次后置丢弃 */
+const SKILL_ITEM_MAX = 200
+/** 技能块总长上限（含标题与命中标注指令），预算不足时从后往前整条丢弃技能 */
+const SKILL_BLOCK_MAX = 2000
+/** 技能块标题（system prompt 末块开头） */
+const SKILL_HEADER = '【自定义走查技能检查要点】除基础检查清单外，逐条核对以下技能要点：'
+/** 技能块命中标注指令：模块3 按正则【命中技能：技能名称】解析统计，标注格式不可改 */
+const SKILL_FOOTER =
+  '命中标注要求：某条问题描述命中上述某项技能要点时，必须在该条 description 末尾追加【命中技能：技能名称】，名称与对应条目「」中的技能名完全一致（示例：【命中技能：深色模式检查】）；未命中技能的问题不加该标注；命中多个技能时并列多个标注；技能要点与基础检查清单冲突时，以技能要点为准。'
+
+/**
+ * 组装单条技能要点行：`N. 技能「名称」：核心规则`。
+ * 超长时依次丢弃「技能指南」长说明段、「（参考：…）」括注，最后按预算硬截断，保证技能名完整。
+ */
+function buildSkillItemLine(index: number, raw: string): string | null {
+  const t = raw.trim()
+  if (!t) return null
+  const fallback = `技能${index}`
+  const name = (t.split(/[：:、\n]/)[0] || '').trim() || fallback
+  const label = `${index}. 技能「${name}」`
+  const bodyRaw = t.startsWith(name) ? t.slice(name.length) : t
+  let body = bodyRaw.replace(/^[：:、\s]+/, '')
+  if (`${label}：${body}`.length > SKILL_ITEM_MAX) {
+    body = body.split('技能指南：')[0].trim()
+    if (`${label}：${body}`.length > SKILL_ITEM_MAX) {
+      body = body.replace(/（参考：[^）]*）/g, '').trim()
+    }
+    if (`${label}：${body}`.length > SKILL_ITEM_MAX) {
+      body = body.slice(0, Math.max(SKILL_ITEM_MAX - label.length - 1, 0))
+    }
+  }
+  return body ? `${label}：${body}` : label
+}
+
+/**
+ * 组装「自定义走查技能」system prompt 末块。
+ * 结构：标题 → 逐条技能要点（单条 ≤200 字符）→ 命中标注指令（description 末尾强制追加【命中技能：技能名称】）。
+ * 整块 ≤2000 字符；无有效技能时返回空串（system prompt 与改造前完全一致）。
+ */
+function skillGuidesPrompt(guides: string[]): string {
+  const lines: string[] = []
+  let used = SKILL_HEADER.length + SKILL_FOOTER.length + 3
+  for (const g of guides) {
+    const line = buildSkillItemLine(lines.length + 1, g)
+    if (!line) continue
+    if (used + line.length + 1 > SKILL_BLOCK_MAX) break
+    lines.push(line)
+    used += line.length + 1
+  }
+  if (!lines.length) return ''
+  return `\n${SKILL_HEADER}\n${lines.join('\n')}\n${SKILL_FOOTER}`
+}
+
 function registerAiHandlers(): void {
   // 测试模型连通性
   ipcMain.handle(
@@ -373,22 +561,25 @@ function registerAiHandlers(): void {
         if (!input.designDataUrl || !input.shotDataUrl) {
           return { ok: false, message: '缺少设计稿或开发截图，无法识别' }
         }
-        // SkillHub 技能指引：作为额外检查要点注入
+        // SkillHub 技能指引：注入位置从用户消息末尾挪到 system prompt 末块（模块2）。
+        // 分块顺序：基础走查规则（SYSTEM_PROMPT）→ 自定义检查项（walkOptionsPrompt）→ 技能要点（含命中标注指令）。
+        // 用户消息内容保持不变（不再拼接技能文本）；首次调用与截断重试共用本 systemPrompt 变量。
         const guides = (input.skillGuides ?? []).map((g) => g.trim()).filter(Boolean)
-        const guideText = guides.length
-          ? `\n请同时结合以下自定义走查技能/检查要点进行识别（逐条核对这些要点，并在描述中注明命中的要点）：\n${guides.map((g, i) => `${i + 1}. ${g}`).join('\n')}`
-          : ''
-        const systemPrompt = SYSTEM_PROMPT + walkOptionsPrompt(input.walkOptions)
-        const userText = `页面名称：${input.pageName || '未命名页面'}\n端类型：${input.platformLabel || '未知'}\n第一张图 = 设计稿，第二张图 = 开发实现截图。请按系统要求输出 JSON。${guideText}`
-        // 使用原始图片：AI 返回归一化坐标基于其接收到的图片，若图片被压缩/缩放，
-        // 坐标会与实际渲染的原始图片产生系统性偏移，导致标注错位。
-        // 每张图前插入文字标签，避免模型混淆两张图导致坐标画错位置
+        const systemPrompt = SYSTEM_PROMPT + walkOptionsPrompt(input.walkOptions) + skillGuidesPrompt(guides)
+        // 图片预处理（阶段1）：解析原图/发送尺寸并记录 scale，
+        // 模型输出的像素 bbox 经 mapBboxToNormalized × scale 反向映射回原始画布坐标
+        const designImg = prepareModelImage(input.designDataUrl, '设计稿')
+        const shotImg = prepareModelImage(input.shotDataUrl, '开发截图')
+        const dimText = (img: ModelImageInfo): string =>
+          img.sentW > 0 ? `（图片尺寸：${img.sentW}×${img.sentH} 像素，坐标基于该像素坐标系）` : ''
+        const userText = `页面名称：${input.pageName || '未命名页面'}\n端类型：${input.platformLabel || '未知'}\n第一张图 = 设计稿${dimText(designImg)}，第二张图 = 开发实现截图${dimText(shotImg)}。所有 x1,y1,x2,y2 坐标使用对应图片像素坐标系下的整数值。请按系统要求输出 JSON。`
+        // 每张图前插入文字标签（含像素尺寸），避免模型混淆两张图导致坐标画错位置
         const content = [
           { type: 'text', text: userText },
-          { type: 'text', text: '【第 1 张图：UI 设计稿】所有 design 标注的坐标相对这张图计算' },
-          { type: 'image_url', image_url: { url: input.designDataUrl } },
-          { type: 'text', text: '【第 2 张图：开发实现截图】所有 screenshot 标注的坐标相对这张图计算' },
-          { type: 'image_url', image_url: { url: input.shotDataUrl } }
+          { type: 'text', text: `【第 1 张图：UI 设计稿${dimText(designImg)}】所有 design 标注的像素坐标相对这张图计算` },
+          { type: 'image_url', image_url: { url: designImg.dataUrl } },
+          { type: 'text', text: `【第 2 张图：开发实现截图${dimText(shotImg)}】所有 screenshot 标注的像素坐标相对这张图计算` },
+          { type: 'image_url', image_url: { url: shotImg.dataUrl } }
         ]
         // 流式接收：避免思考型模型整体超时；进度实时推送给渲染层显示
         const startedAt = Date.now()
@@ -420,7 +611,7 @@ function registerAiHandlers(): void {
         let text = first.text
         let issues: AIAnnotation[]
         try {
-          issues = normalizeIssues(extractJson(text).issues)
+          issues = normalizeIssues(extractJson(text).issues, { design: designImg, shot: shotImg })
         } catch (parseErr) {
           // 思考型模型可能把 max_tokens 全部耗在 reasoning 上导致响应截断（finish_reason=length），
           // 此时自动携带「关闭思考」参数重试一次（vLLM 标准参数，其他服务仅在截断时才会触发）
@@ -434,7 +625,7 @@ function registerAiHandlers(): void {
             chatOpts
           )
           text = retry.text
-          issues = normalizeIssues(extractJson(text).issues)
+          issues = normalizeIssues(extractJson(text).issues, { design: designImg, shot: shotImg })
         }
         return { ok: true, issues, message: `识别完成，共 ${issues.length} 条候选` }
       } catch (err) {

@@ -45,6 +45,13 @@ export default {
   aiOverwriteConfirm: 'This will overwrite {{n}} unreviewed AI candidates. Re-run recognition?',
   aiDoneWithCount: 'AI recognition complete: {{n}} candidates. Review them one by one in the issue list',
   aiDoneNoDiff: 'AI recognition complete: no obvious differences found',
+  close: 'Close',
+  /** Confirm dialog when clicking again while recognition is running */
+  aiRunningDialogTitle: 'AI recognition in progress',
+  aiRunningDialogDesc: 'A recognition task is already running on this page. Keep waiting for the result, interrupt it, or interrupt and start a new recognition.',
+  aiRunningContinue: 'Continue',
+  aiRunningInterrupt: 'Interrupt',
+  aiRunningRestart: 'Restart',
   /** Focus mode and workbench tools */
   focusingOn: 'Focusing on: {{desc}}',
   exitFocus: 'Exit focus',

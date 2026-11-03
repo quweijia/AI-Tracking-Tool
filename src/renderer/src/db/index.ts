@@ -182,6 +182,8 @@ export interface DesignSpec {
   figFileName?: string
   /** .fig 上传存档路径（仅存档不解析） */
   figArchivePath?: string
+  /** JSON 导入的源文件名列表（详情页本地源文件展示用） */
+  jsonSourceNames?: string[]
   note?: string
   /** 最近同步时间 */
   lastSyncedAt?: number

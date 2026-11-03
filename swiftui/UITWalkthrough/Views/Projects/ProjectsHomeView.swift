@@ -17,16 +17,15 @@ struct ProjectsHomeView: View {
         NavigationStack {
             ScrollView {
                 if projects.isEmpty {
-                    ContentUnavailableView(
+                    AppEmptyState(
                         "暂无项目",
-                        systemImage: "square.grid.2x2",
-                        description: Text("点击右上角「新建项目」创建第一个走查项目")
+                        description: "点击右上角「新建项目」创建第一个走查项目",
+                        systemImage: "square.grid.2x2"
                     )
-                    .frame(maxWidth: .infinity, minHeight: 480)
                 } else {
                     LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: 260), spacing: 16)],
-                        spacing: 16
+                        columns: [GridItem(.adaptive(minimum: SizeTokens.projectGridMin), spacing: Spacing.xlg)],
+                        spacing: Spacing.xlg
                     ) {
                         ForEach(projects.sorted { $0.sortOrder < $1.sortOrder }) { project in
                             NavigationLink(value: project.id) {
@@ -43,7 +42,7 @@ struct ProjectsHomeView: View {
                             }
                         }
                     }
-                    .padding(24)
+                    .padding(Spacing.hero)
                 }
             }
             .navigationTitle("项目")
@@ -51,10 +50,8 @@ struct ProjectsHomeView: View {
                 ProjectDetailView(projectID: projectID)
             }
             .toolbar {
-                Button {
+                AppButton("新建项目", icon: "plus", style: .primary) {
                     sheetMode = .create
-                } label: {
-                    Label("新建项目", systemImage: "plus")
                 }
             }
             .sheet(item: $sheetMode) { mode in
@@ -102,36 +99,33 @@ struct ProjectCardView: View {
     let unresolvedCount: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                ProjectLogoView(project: project, size: 40)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(project.name)
-                        .font(.headline)
-                        .lineLimit(1)
-                    Text(timeAgo(project.updatedAt))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        AppCardHover(padding: SizeTokens.cardPadding, cornerRadius: Radius.lg) {
+            VStack(alignment: .leading, spacing: Spacing.mg) {
+                HStack(spacing: Spacing.mg) {
+                    ProjectLogoView(project: project, size: 40)
+                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                        Text(project.name)
+                            .font(.system(size: FontTokens.Size.sectionHeader, weight: FontTokens.Weight.semibold))
+                            .foregroundStyle(Color.text)
+                            .lineLimit(1)
+                        Text(timeAgo(project.updatedAt))
+                            .font(.system(size: FontTokens.Size.captionSmall))
+                            .foregroundStyle(Color.textSecondary)
+                    }
+                    Spacer()
                 }
-                Spacer()
+                FlowPlatformChips(platforms: project.platform)
+                HStack(spacing: Spacing.lg) {
+                    Label("\(pageCount)", systemImage: "photo.on.rectangle")
+                    Label("\(unresolvedCount)", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(unresolvedCount > 0 ? Color.orange : .textSecondary)
+                    Spacer()
+                }
+                .font(.system(size: FontTokens.Size.captionSmall))
+                .foregroundStyle(Color.textSecondary)
             }
-            FlowPlatformChips(platforms: project.platform)
-            HStack(spacing: 12) {
-                Label("\(pageCount)", systemImage: "photo.on.rectangle")
-                Label("\(unresolvedCount)", systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(unresolvedCount > 0 ? Color.orange : Color.secondary)
-                Spacer()
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(.separator, lineWidth: 1)
-        )
     }
 }
 
@@ -140,7 +134,7 @@ struct FlowPlatformChips: View {
     let platforms: [Platform]
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Spacing.xxs) {
             ForEach(platforms) { p in
                 PlatformBadgeView(platform: p)
             }
@@ -176,34 +170,31 @@ struct ProjectSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             Text(isEdit ? "编辑项目" : "新建项目")
-                .font(.headline)
-                .padding(.top, 16)
+                .font(.system(size: FontTokens.Size.sectionHeader, weight: FontTokens.Weight.semibold))
+                .foregroundStyle(Color.text)
+                .padding(.top, Spacing.lg)
             Form {
-                HStack(spacing: 14) {
+                HStack(spacing: Spacing.lg) {
                     logoPreview
-                    VStack(alignment: .leading, spacing: 6) {
-                        Button("上传 Logo") { importLogo() }
+                    VStack(alignment: .leading, spacing: Spacing.xlg) {
+                        AppButton("上传 Logo", icon: nil, style: .secondary) { importLogo() }
                         if logoRelativePath != nil {
-                            Button("移除 Logo", role: .destructive) { logoRelativePath = nil }
+                            AppButton("移除 Logo", icon: nil, style: .danger) { logoRelativePath = nil }
                         }
                     }
                 }
-                TextField("项目名称", text: $name)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("适用端类型（可多选）")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 6) {
+                AppInput($name, placeholder: "项目名称")
+                VStack(alignment: .leading, spacing: Spacing.xlg) {
+                    FieldLabel(text: "适用端类型（可多选）")
+                    HStack(spacing: Spacing.xlg) {
                         ForEach(Platform.allCases) { p in
                             chip(p)
                         }
                     }
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("文字 Logo 底色")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: Spacing.xlg) {
+                    FieldLabel(text: "文字 Logo 底色")
+                    HStack(spacing: Spacing.xlg) {
                         dot(nil, label: "自动")
                         ForEach(ProjectBranding.logoColors, id: \.self) { hex in
                             dot(hex, label: hex)
@@ -212,16 +203,15 @@ struct ProjectSheet: View {
                 }
             }
             .formStyle(.grouped)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, Spacing.lg)
             HStack {
                 Spacer()
-                Button("取消") { dismiss() }
+                AppButton("取消", icon: nil, style: .secondary) { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(isEdit ? "保存" : "创建") { submit() }
+                AppButton(isEdit ? "保存" : "创建", icon: nil, style: .primary, isDisabled: name.trimmingCharacters(in: .whitespaces).isEmpty) { submit() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            .padding(12)
+            .padding(Spacing.lg)
         }
         .frame(width: 420)
         .onAppear { load() }
@@ -239,12 +229,12 @@ struct ProjectSheet: View {
             } else {
                 (colorFromHex(logoColor ?? "") ?? Color.gray)
                 Text(String(name.prefix(1)).isEmpty ? "?" : String(name.prefix(1)))
-                    .font(.title2.weight(.semibold))
+                    .font(.system(size: FontTokens.Size.pageHeader, weight: FontTokens.Weight.semibold))
                     .foregroundStyle(.white)
             }
         }
         .frame(width: 56, height: 56)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.lg))
     }
 
     private func chip(_ p: Platform) -> some View {
@@ -252,15 +242,15 @@ struct ProjectSheet: View {
             if platforms.contains(p) { platforms.remove(p) } else { platforms.insert(p) }
         } label: {
             Text(p.label)
-                .font(.caption)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+                .font(.system(size: FontTokens.Size.captionSmall))
+                .padding(.horizontal, Spacing.mg)
+                .padding(.vertical, Spacing.xs)
                 .background(
-                    platforms.contains(p) ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor),
+                    platforms.contains(p) ? Color.primarySoft : Color.fill,
                     in: Capsule()
                 )
-                .overlay(Capsule().strokeBorder(platforms.contains(p) ? Color.accentColor : Color(nsColor: .separatorColor)))
-                .foregroundStyle(platforms.contains(p) ? Color.accentColor : Color.primary)
+                .overlay(Capsule().strokeBorder(platforms.contains(p) ? Color.primary : Color.border, lineWidth: 1))
+                .foregroundStyle(platforms.contains(p) ? Color.primaryDark : Color.text)
         }
         .buttonStyle(.plain)
     }
@@ -270,10 +260,10 @@ struct ProjectSheet: View {
             logoColor = hex
         } label: {
             Circle()
-                .fill(hex.map { colorFromHex($0) ?? Color.gray } ?? Color(nsColor: .controlBackgroundColor))
-                .frame(width: 20, height: 20)
+                .fill(hex.map { colorFromHex($0) ?? .fill } ?? .fill)
+                .frame(width: SizeTokens.colorSwatchSize, height: SizeTokens.colorSwatchSize)
                 .overlay(
-                    Circle().strokeBorder(logoColor == hex ? Color.primary : Color(nsColor: .separatorColor), lineWidth: logoColor == hex ? 2 : 1)
+                    Circle().strokeBorder(logoColor == hex ? Color.primary : Color.border, lineWidth: logoColor == hex ? 2 : 1)
                 )
         }
         .buttonStyle(.plain)

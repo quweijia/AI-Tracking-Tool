@@ -457,7 +457,7 @@ struct AnnotationLayer: View {
                 .overlay(Circle().strokeBorder(Color.white, lineWidth: 1.5))
             Text(displayText)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(colorFromHex(SeverityRenderColor.pickLabelHex) ?? .primary)
+                .foregroundStyle(colorFromHex(SeverityRenderColor.pickLabelHex) ?? Color.primary)
                 .whiteHalo()
                 .fixedSize()
         }

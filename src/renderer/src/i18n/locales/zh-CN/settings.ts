@@ -55,6 +55,8 @@ export default {
   langDesc: '切换后界面文案即时生效，无需重启应用',
   soundLabel: '任务完成音效',
   soundDesc: 'AI 识别任务完成后播放提示音，关闭后静默',
+  specMenuLabel: '设计规范功能',
+  specMenuDesc: '关闭后隐藏侧边栏「设计规范」菜单入口',
   // AI 小助手管理
   assistantTitle: 'AI 小助手',
   assistantDesc: '控制 AI 小助手的显示与悬浮球样式，并为助手指定专用 AI 大模型，改动即时生效。',
@@ -84,6 +86,28 @@ export default {
   tol_border_hint: '边框宽度允许的偏差（px）',
   tol_color: '色差 ΔE',
   tol_color_hint: 'CIEDE2000 色差阈值，2 以内肉眼难以分辨',
+  // 分层还原度判定（增量旁路，默认关闭；与全局容差相互独立）
+  layeredTitle: '分层还原度判定',
+  layeredDesc: '按模块 / 元素两级容差将偏差判定为「吸收」或「上报」，并给出整体还原度评分；与上方全局容差相互独立，改动即时生效。',
+  layered_toggle: '启用分层还原度判定',
+  layered_on: '开启分层还原度判定',
+  layered_off: '关闭分层还原度判定',
+  layered_tol_module_pos: '模块级位置容差',
+  layered_tol_module_pos_hint: '模块（容器）整体中心点偏移允许值（px）',
+  layered_tol_module_size: '模块级尺寸容差',
+  layered_tol_module_size_hint: '模块（容器）整体宽高允许的偏差（px）',
+  layered_tol_element_pos: '元素级位置容差',
+  layered_tol_element_pos_hint: '控件 / 文本中心点偏移允许值（px）',
+  layered_tol_element_size: '元素级尺寸容差',
+  layered_tol_element_size_hint: '控件 / 文本宽高允许的偏差（px）',
+  layered_w_module: '模块级扣分权重',
+  layered_w_module_hint: '模块级上报偏差的扣分权重（0~1）',
+  layered_w_element: '元素级扣分权重',
+  layered_w_element_hint: '元素级上报偏差的扣分权重（0~1）',
+  layered_w_position: '位置维扣分权重',
+  layered_w_position_hint: '位置维度在扣分中的占比（0~1）',
+  layered_w_size: '尺寸维扣分权重',
+  layered_w_size_hint: '尺寸维度在扣分中的占比（0~1）',
   // MCP 弹窗
   editMcp: '编辑 MCP 服务',
   addMcp: '添加 MCP 服务',
@@ -165,7 +189,7 @@ export default {
   // 关于
   aboutAlt: 'AI 走查工具',
   appName: 'AI 走查工具',
-  aboutDesc: 'UI 设计走查工具：设计稿与开发截图对比、标注、复验与报告导出。数据全部保存在本机。',
+  aboutDesc: '设计稿与开发截图多模式对比，AI 识别候选差异并生成标注，支持逐条复验与一键导出走查报告。数据全程保存在本机。',
   author: '作者',
   techStack: '技术栈'
 }

@@ -1,52 +1,62 @@
 import SwiftUI
 
 /// 应用根视图：侧边栏导航 + 内容区路由
-/// （对齐 Electron 版 [App.tsx] 路由结构与 [Layout.tsx] 左侧项目树）
+/// 对齐 Electron 版 [App.tsx] 路由结构与 [Layout.tsx] 左侧项目树
+/// 侧边栏：AppSidebar (200px 白底 + 导航圆点)
+/// 顶栏：AppTopBar (52px + 红绿灯 + 搜索 + 品牌)
 struct RootView: View {
     @State private var appState = AppState()
+    @State private var sidebarCollapsed = false
+    @State private var searchText = ""
 
     var body: some View {
-        @Bindable var appState = appState
-        NavigationSplitView {
-            // 侧边栏切换到其他节时清掉报告导出目标，回到报告列表
-            List(selection: Binding(
-                get: { appState.section },
-                set: {
-                    if $0 != appState.section { appState.reportExportPageID = nil }
-                    appState.section = $0
-                }
-            )) {
-                Section {
-                    ForEach(AppSection.allCases) { section in
-                        Label(section.title, systemImage: section.icon)
-                            .tag(section)
-                    }
-                }
+        HStack(spacing: 0) {
+            // 左侧导航栏（对齐 Electron .app-sidebar）
+            AppSidebar(
+                selection: $appState.section,
+                isCollapsed: $sidebarCollapsed,
+                logoImage: nil,
+                versionText: "v1.0.0"
+            )
+
+            // 主内容区
+            VStack(spacing: 0) {
+                // 顶栏
+                AppTopBar(
+                    title: appState.section.title,
+                    showSearch: true,
+                    searchText: $searchText
+                )
+
+                // 内容路由
+                contentForSection(appState.section)
             }
-            .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 320)
-            .listStyle(.sidebar)
-        } detail: {
-            switch appState.section {
-            case .projects:
-                ProjectsHomeView()
-            case .recent:
-                ComingSoonView(title: "最近访问", hint: "对应 Electron 版 RecentAccess")
-            case .compare:
-                CompareWorkbenchView()
-            case .reports:
-                if let pid = appState.reportExportPageID {
-                    ExportReportView(pageId: pid)
-                } else {
-                    ReportsHomeView()
-                }
-            case .specs:
-                SpecSpaceView()
-            case .settings:
-                SettingsView()
-            }
+            .background(Color.appBg)
         }
         .environment(appState)
         .frame(minWidth: 1100, minHeight: 700)
+    }
+
+    @ViewBuilder
+    private func contentForSection(_ section: AppSection) -> some View {
+        switch section {
+        case .projects:
+            ProjectsHomeView()
+        case .recent:
+            ComingSoonView(title: "最近访问", hint: "对应 Electron 版 RecentAccess")
+        case .compare:
+            CompareWorkbenchView()
+        case .reports:
+            if let pid = appState.reportExportPageID {
+                ExportReportView(pageId: pid)
+            } else {
+                ReportsHomeView()
+            }
+        case .specs:
+            SpecSpaceView()
+        case .settings:
+            SettingsView()
+        }
     }
 }
 
@@ -84,17 +94,18 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-/// 里程碑占位页：标注对应待迁移的 Electron 模块
+/// 里程碑占位页：使用 AppEmptyState 替代默认 ContentUnavailableView
 struct ComingSoonView: View {
     let title: String
     var hint: String
 
     var body: some View {
-        ContentUnavailableView {
-            Label(title, systemImage: "hammer")
-        } description: {
-            Text(hint)
-        }
+        AppEmptyState(
+            title,
+            description: hint,
+            systemImage: "hammer"
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

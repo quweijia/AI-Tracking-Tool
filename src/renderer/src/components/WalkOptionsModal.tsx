@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ToleranceConfig, WalkCheckOptions } from '../../../shared/types'
 import { WALK_ANALYSES, WALK_DIMENSIONS } from '../../../shared/types'
+import type { SkillItemLite } from '../utils/skillGuide'
 
 /** 弹窗骨架（复用全局 .modal-mask/.modal 样式）：Esc 关闭 + 点击遮罩关闭 */
 function ModalShell({
@@ -9,13 +10,16 @@ function ModalShell({
   desc,
   onCancel,
   children,
-  footer
+  footer,
+  overlay
 }: {
   title: string
   desc?: string
   onCancel: () => void
   children: React.ReactNode
   footer: React.ReactNode
+  /** 渲染在遮罩层根节点内的悬浮层（如鼠标跟随气泡，不受弹窗滚动区裁剪） */
+  overlay?: React.ReactNode
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -27,12 +31,26 @@ function ModalShell({
 
   return (
     <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
+      {/* 弹窗超过窗口高度时内容区自适应滚动，隐藏滚动条滑块（组件级样式，不影响全局） */}
+      <style>{`
+.walk-opt-modal{max-height:calc(100vh - 96px);display:flex;flex-direction:column}
+.walk-opt-modal .modal-actions{flex-shrink:0}
+.walk-opt-body{flex:1;min-height:0;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}
+.walk-opt-body::-webkit-scrollbar{width:0;height:0;display:none}
+/* 技能列表项精简：仅大标题 + 左侧复选框垂直居中 */
+.walk-opt-modal .skill-pick-item{align-items:center}
+.walk-opt-modal .skill-pick-check{margin-top:0}
+/* 技能详情气泡：鼠标跟随，fixed 定色不随亮暗主题切换 */
+.walk-skill-tip{position:fixed;z-index:2100;max-width:320px;padding:8px 12px;border-radius:8px;background:#1f1f26;color:#f2f2f5;font-size:12px;line-height:1.6;pointer-events:none;box-shadow:0 8px 20px rgba(0,0,0,.25)}
+`}</style>
       <div className="modal walk-opt-modal">
         <h3>{title}</h3>
         {desc && <p className="settings-desc">{desc}</p>}
-        {children}
+        <div className="walk-opt-body">{children}</div>
         <div className="modal-actions">{footer}</div>
       </div>
+      {/* 悬浮层（鼠标跟随气泡）：fixed + pointer-events:none，遮罩层全屏无裁剪 */}
+      {overlay}
     </div>
   )
 }
@@ -112,19 +130,45 @@ function OptSection({ title, children }: { title: string; children: React.ReactN
  */
 export function WalkCheckOptionsModal({
   initial,
+  skills,
+  skillIds,
+  onSkillChange,
+  onSaveSkillDefault,
   onSave,
   onCancel
 }: {
   initial: WalkCheckOptions
+  /** 可选走查技能列表（config.skills）与当前已选 id（保存时一并提交生效） */
+  skills: SkillItemLite[]
+  skillIds: string[]
+  onSkillChange: (ids: string[]) => void
+  /** 将勾选保存为全局默认绑定技能 */
+  onSaveSkillDefault: (ids: string[]) => void
   onSave: (opts: WalkCheckOptions) => void
   onCancel: () => void
 }) {
   const { t } = useTranslation('walkOptionsModal')
+  const { t: ta } = useTranslation('autoWalkPanel')
   const [dimensions, setDimensions] = useState<string[]>(initial.dimensions)
   const [depth, setDepth] = useState<WalkCheckOptions['depth']>(initial.depth)
   const [analysis, setAnalysis] = useState<string[]>(initial.analysis)
   const [style, setStyle] = useState<WalkCheckOptions['style']>(initial.style)
   const [a11y, setA11y] = useState<boolean>(initial.a11y)
+  /** 技能多选（批量提交：勾选只改本地，保存时随检查项一并生效） */
+  const [picked, setPicked] = useState<string[]>(skillIds)
+
+  const toggleSkill = (id: string): void =>
+    setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+
+  /** 技能详情气泡（鼠标跟随）：desc 为空的技能不显示 */
+  const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null)
+  const showTip = (e: React.MouseEvent, text: string): void => {
+    if (!text) return
+    setTip({ x: e.clientX, y: e.clientY, text })
+  }
+  const moveTip = (e: React.MouseEvent): void => {
+    setTip((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev))
+  }
 
   // 展示 label 随界面语言生成（WALK_DIMENSIONS/WALK_ANALYSES 的原 label 仅用于 AI prompt 注入）
   const dimOptions = WALK_DIMENSIONS.map((d) => ({ key: d.key, label: t(`dim_${d.key}`) }))
@@ -135,8 +179,23 @@ export function WalkCheckOptionsModal({
       title={t('checkTitle')}
       desc={t('checkDesc')}
       onCancel={onCancel}
+      overlay={
+        tip && (
+          <div className="walk-skill-tip" style={{ left: tip.x + 14, top: tip.y + 14 }}>
+            {tip.text}
+          </div>
+        )
+      }
       footer={
         <>
+          <button
+            className="btn-secondary"
+            disabled={picked.length === 0}
+            title={ta('skillPickDesc')}
+            onClick={() => onSaveSkillDefault(picked)}
+          >
+            {ta('skillSaveDefault')}
+          </button>
           <span className="modal-spacer" />
           <button className="btn-secondary" onClick={onCancel}>
             {t('cancel')}
@@ -144,13 +203,42 @@ export function WalkCheckOptionsModal({
           <button
             className="btn-primary"
             disabled={dimensions.length === 0 || analysis.length === 0}
-            onClick={() => onSave({ dimensions, depth, analysis, style, a11y })}
+            onClick={() => {
+              onSave({ dimensions, depth, analysis, style, a11y })
+              onSkillChange(picked)
+            }}
           >
             {t('save')}
           </button>
         </>
       }
     >
+      <OptSection title={ta('skillLabel')}>
+        {skills.length === 0 ? (
+          <p className="settings-empty">{ta('skillPickEmpty')}</p>
+        ) : (
+          <div className="skill-pick-list">
+            {skills.map((s) => {
+              const active = picked.includes(s.id)
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  className={`skill-pick-item ${active ? 'active' : ''}`}
+                  onMouseEnter={(e) => showTip(e, s.desc ?? '')}
+                  onMouseMove={moveTip}
+                  onMouseLeave={() => setTip(null)}
+                  onClick={() => toggleSkill(s.id)}
+                >
+                  <span className="skill-pick-check">{active ? '✓' : ''}</span>
+                  <span className="skill-pick-name">{s.name}</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </OptSection>
+
       <OptSection title={t('secDimensions')}>
         <CheckChips options={dimOptions} value={dimensions} onChange={setDimensions} />
       </OptSection>
@@ -207,20 +295,25 @@ export function WalkCheckOptionsModal({
 export function WalkAdvancedModal({
   initial,
   debugEnabled,
+  layeredEnabled,
   canRun,
   busy,
   onSave,
   onToggleDebug,
+  onChangeLayeredEnabled,
   onRun,
   onCancel
 }: {
   initial: ToleranceConfig
   debugEnabled: boolean
+  /** 分层还原度判定开关（与 Settings 页共用同一配置键，此处只切 enabled） */
+  layeredEnabled: boolean
   /** 是否具备运行条件（有最近一次走查的采集缓存且当前不忙） */
   canRun: boolean
   busy: boolean
   onSave: (t: ToleranceConfig) => void
   onToggleDebug: (v: boolean) => void
+  onChangeLayeredEnabled: (v: boolean) => void
   onRun: () => void
   onCancel: () => void
 }) {
@@ -279,6 +372,18 @@ export function WalkAdvancedModal({
         >
           {busy ? t('advRunning') : t('advRunNow')}
         </button>
+      </OptSection>
+      <OptSection title={t('layeredSec')}>
+        <div className="walk-opt-switch-row">
+          <span>{t('layeredToggle')}</span>
+          <button
+            type="button"
+            className={`switch ${layeredEnabled ? 'on' : ''}`}
+            title={layeredEnabled ? t('layeredOff') : t('layeredOn')}
+            onClick={() => onChangeLayeredEnabled(!layeredEnabled)}
+          />
+        </div>
+        <p className="settings-desc walk-opt-hint">{t('layeredHint')}</p>
       </OptSection>
       <OptSection title={t('tolTitle')}>
         <div className="settings-tol-grid">

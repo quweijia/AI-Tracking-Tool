@@ -198,6 +198,7 @@ body {
   transition: opacity 0.12s;
 }
 
+/* 悬停显现操作图标（对齐原生 macOS 失焦时红绿灯悬停也会点亮） */
 .window-controls:hover .win-btn svg {
   opacity: 0.6;
 }
@@ -225,6 +226,19 @@ body {
 [data-theme='dark'] .window-controls.inactive .win-btn.min,
 [data-theme='dark'] .window-controls.inactive .win-btn.max {
   background: #4b5058;
+}
+
+/* 失焦悬停点亮：悬停红绿灯区域时恢复三色并显现操作图标（对齐原生 macOS 行为） */
+.window-controls.inactive:hover .win-btn.close {
+  background: #ff5f57;
+}
+
+.window-controls.inactive:hover .win-btn.min {
+  background: #febc2e;
+}
+
+.window-controls.inactive:hover .win-btn.max {
+  background: #28c840;
 }
 
 /* ===== 侧边栏展开 / 收起（折叠按钮位于底部 footer，Made by 右侧） ===== */
@@ -799,6 +813,23 @@ a.btn-secondary {
   text-align: center;
   padding: 80px 20px;
   color: var(--text-2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.empty-state::before {
+  content: "";
+  width: 300px;
+  /* 盒子高度匹配插画宽高比（1637×960），避免 contain 垂直留白拉开与文案的视觉间距 */
+  height: calc(300px * 960 / 1637);
+  flex-shrink: 0;
+  background: url(../assets/empty-state.png) center/contain no-repeat;
+}
+
+.empty-state p {
+  margin: 0;
 }
 
 .field-label {
@@ -1081,6 +1112,107 @@ a.btn-secondary {
   padding: 8px 10px;
 }
 
+/* ===== 标注页「绑定规范」弹窗：单列整宽行卡（bind-spec-modal 修饰，不影响项目弹窗） ===== */
+.modal.bind-spec-modal {
+  width: 500px;
+}
+
+.bind-spec-modal .modal-subtitle {
+  margin: -4px 0 10px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.bind-spec-modal .spec-bind-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bind-spec-modal .spec-bind-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fafbfd;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.bind-spec-modal .spec-bind-row:hover {
+  border-color: #cdd9f5;
+  background: #f8faff;
+}
+
+/* 已绑定：主色浅描边 + 图标块主色（置于 hover 后避免被覆盖） */
+.bind-spec-modal .spec-bind-row.bound,
+.bind-spec-modal .spec-bind-row.bound:hover {
+  border-color: rgba(37, 99, 235, 0.3);
+  background: var(--primary-soft);
+}
+
+/* 分类标题行：图标 + 名称左对齐 */
+.bind-spec-modal .spec-bind-cat {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bind-spec-modal .spec-bind-cat-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #eceff4;
+  color: var(--text-2);
+  transition: background 0.15s, color 0.15s;
+}
+
+.bind-spec-modal .spec-bind-row.bound .spec-bind-cat-icon {
+  background: #fff;
+  color: var(--primary);
+}
+
+.bind-spec-modal .spec-bind-cat-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bind-spec-modal .spec-bind-row.bound .spec-bind-cat-name {
+  color: var(--primary-dark);
+}
+
+/* 下拉框占满卡片宽度自适应 */
+.bind-spec-modal .spec-bind-select {
+  width: 100%;
+}
+
+.bind-spec-modal .spec-bind-select .u-select-btn {
+  width: 100%;
+}
+
+.bind-spec-modal .spec-bind-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 28px 16px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  background: #fafbfd;
+  font-size: 12.5px;
+}
+
 /* ===== 版本 / 页面 ===== */
 .version-head {
   display: flex;
@@ -1252,6 +1384,15 @@ a.btn-secondary {
   /* 与文件夹末尾「+ 新建文件夹」快捷卡字体/颜色统一 */
   font-size: 13px;
   font-weight: 500;
+}
+
+/* 悬停与「+ 新建文件夹」快捷卡一致：边框/文字主色 + 上移，背景保持透明（覆盖通用 page-card 悬停的淡蓝底） */
+.page-card.add-page:hover {
+  border-color: var(--primary);
+  background: transparent;
+  box-shadow: var(--shadow-card);
+  transform: translateY(-1px);
+  color: var(--primary);
 }
 
 .page-name {
@@ -2336,7 +2477,7 @@ a.btn-secondary {
   stroke: #fff;
   stroke-width: 4px;
   stroke-linejoin: round;
-  pointer-events: none;
+  cursor: move;
 }
 
 .anno-measure-label.status-fixed {
@@ -2356,7 +2497,6 @@ a.btn-secondary {
   stroke: #fff;
   stroke-width: 4px;
   stroke-linejoin: round;
-  pointer-events: none;
 }
 
 [data-theme='dark'] .anno-pick-label {
@@ -3116,7 +3256,9 @@ a.btn-secondary {
 .anno-svg.pan-mode .anno-box,
 .anno-svg.pan-mode .anno-point-hit,
 .anno-svg.pan-mode .anno-arrow-hit,
-.anno-svg.pan-mode .anno-text {
+.anno-svg.pan-mode .anno-text,
+.anno-svg.pan-mode .anno-measure-label,
+.anno-svg.pan-mode .anno-pick-label {
   cursor: grab;
 }
 
@@ -3396,6 +3538,19 @@ a.btn-secondary {
 .ai-msg.err {
   background: #fde8e8;
   color: #dc2626;
+}
+
+/* 通知条 flex 布局：文字左对齐，关闭按钮垂直居中并贴最右侧（ok/err 仅通知条使用，不影响 AI 助手聊天气泡的同名 .ai-msg） */
+.ai-msg.ok,
+.ai-msg.err {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-msg.ok > .auto-walk-msg-close,
+.ai-msg.err > .auto-walk-msg-close {
+  margin-left: auto;
 }
 
 /* ===== 导出确认弹窗文案 ===== */
@@ -4683,8 +4838,9 @@ a.btn-secondary {
 .about-hero {
   display: flex;
   gap: 16px;
-  align-items: flex-start;
-  margin-bottom: 16px;
+  /* App icon 与右侧「标题 + 简介」两行文案垂直居中 */
+  align-items: center;
+  margin-bottom: 14px;
 }
 
 .about-logo {
@@ -4719,9 +4875,10 @@ a.btn-secondary {
   margin: 6px 0 0;
 }
 
-/* 作者 / 技术栈：与名称、描述左对齐 */
+/* 作者 / 技术栈：独立区块下移，与上方内容以分界线分隔 */
 .about-meta {
-  margin-top: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
 }
 
 .about-meta-line {
@@ -4926,6 +5083,44 @@ a.btn-secondary {
   font-weight: 500;
 }
 
+/* ===== 树形下拉（UTreeSelect）：多级文件夹展开/折叠选择 ===== */
+.u-tree-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.u-tree-toggle {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  color: var(--text-3);
+}
+.u-tree-toggle:hover {
+  background: rgba(15, 23, 42, 0.08);
+}
+.u-tree-toggle svg {
+  transition: transform 0.15s;
+}
+.u-tree-toggle.open svg {
+  transform: rotate(90deg);
+}
+
+.u-tree-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.u-tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 [data-theme='dark'] .u-select-btn {
   background: #20262f;
   color: #d5dbe5;
@@ -4952,6 +5147,10 @@ a.btn-secondary {
 [data-theme='dark'] .u-select-item.active {
   background: rgba(37, 99, 235, 0.22);
   color: #7ea6ff;
+}
+
+[data-theme='dark'] .u-tree-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 [data-theme='dark'] .status-select .u-select-btn {
@@ -5454,6 +5653,107 @@ a.btn-secondary {
   color: #f87171;
 }
 
+/* ---------- 分层还原度明细抽屉 ---------- */
+.lr-summary {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.lr-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+}
+
+.lr-stat-num {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.lr-stat-label {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+/* 还原度分数三档色：≥90 绿 / ≥75 黄 / 其余红 */
+.lr-stat.lr-tone-good .lr-stat-num {
+  color: #16a34a;
+}
+
+.lr-stat.lr-tone-mid .lr-stat-num {
+  color: #b45309;
+}
+
+.lr-stat.lr-tone-low .lr-stat-num {
+  color: #dc2626;
+}
+
+/* 判定徽标：已吸收（灰绿）/ 已上报（蓝） */
+.lr-verdict {
+  flex-shrink: 0;
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.lr-verdict-absorbed {
+  background: #e8f7ee;
+  color: #15803d;
+}
+
+.lr-verdict-reported {
+  background: #e8f0fe;
+  color: #2563eb;
+}
+
+.lr-meta {
+  color: var(--text-3);
+}
+
+.lr-empty {
+  text-align: center;
+  color: var(--text-2);
+  font-size: 12px;
+  padding: 24px 0;
+}
+
+[data-theme='dark'] .lr-stat {
+  border-color: #3a4250;
+  background: #232933;
+}
+
+[data-theme='dark'] .lr-stat.lr-tone-good .lr-stat-num {
+  color: #4ade80;
+}
+
+[data-theme='dark'] .lr-stat.lr-tone-mid .lr-stat-num {
+  color: #fbbf24;
+}
+
+[data-theme='dark'] .lr-stat.lr-tone-low .lr-stat-num {
+  color: #f87171;
+}
+
+[data-theme='dark'] .lr-verdict-absorbed {
+  background: rgba(21, 128, 61, 0.22);
+  color: #4ade80;
+}
+
+[data-theme='dark'] .lr-verdict-reported {
+  background: rgba(37, 99, 235, 0.22);
+  color: #7cabf9;
+}
+
 /* ---------- 设置页：自动走查容差 ---------- */
 .settings-tolerance {
   margin-top: 4px;
@@ -5764,6 +6064,90 @@ button.switch:disabled {
 /* 分类筛选组（间距规范等）推到筛选条最右侧 */
 .aw-filters .aw-chip-group:last-child {
   margin-left: auto;
+}
+
+/* ===== 技能效果统计面板（模块3）===== */
+.aw-skill-stats {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  flex-shrink: 0;
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+.aw-skill-stats-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: left;
+}
+.aw-skill-stats-head:hover {
+  color: var(--primary);
+}
+.aw-skill-stats-arrow {
+  display: inline-block;
+  font-size: 10px;
+  transition: transform 0.15s;
+}
+.aw-skill-stats-arrow.open {
+  transform: rotate(90deg);
+}
+.aw-skill-stats-hint {
+  font-weight: 400;
+  color: var(--text-3);
+}
+.aw-skill-stats-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 12px 12px;
+}
+.aw-skill-stats-summary {
+  font-size: 12px;
+  color: var(--text);
+}
+.aw-skill-stats-empty {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.aw-skill-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.aw-skill-stats-table th {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  text-align: left;
+  padding: 4px 8px;
+}
+.aw-skill-stats-table td {
+  font-size: 12px;
+  color: var(--text);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.aw-skill-stats-none {
+  color: var(--text-3);
+}
+/* 聚焦条命中技能小标签（aw-focus-bar 为 flex 布局，需 flex-shrink:0 防挤压） */
+.aw-focus-bar .aw-skill-tag {
+  font-style: normal;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--primary);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* 抓手模式下走查结果画布同步光标 */
@@ -7092,10 +7476,41 @@ button.switch:disabled {
   font-weight: 600;
 }
 .rv2-empty {
-  padding: 28px 10px;
+  padding: 16px 10px;
   text-align: center;
   font-size: 12.5px;
   color: var(--text-3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.rv2-empty::before {
+  content: "";
+  width: 240px;
+  height: calc(240px * 960 / 1637);
+  flex-shrink: 0;
+  background: url(../assets/empty-state.png) center/contain no-repeat;
+}
+
+.rv2-empty p {
+  margin: 0;
+}
+
+/* 访问记录卡空态：列表区撑满卡内剩余高度，缺省图与文案垂直居中 */
+.rv2-main > .rv2-card:has(> .rv2-table > .rv2-empty) {
+  display: flex;
+  flex-direction: column;
+}
+.rv2-main > .rv2-card:has(> .rv2-table > .rv2-empty) > .rv2-table {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.rv2-main > .rv2-card:has(> .rv2-table > .rv2-empty) > .rv2-table > .rv2-empty {
+  flex: 1;
+  justify-content: center;
 }
 
 /* ---- 常用工具 ---- */
@@ -9177,12 +9592,13 @@ body.batch-bar-active .back-top-btn {
   white-space: nowrap;
 }
 
-/* ---- 来源卡：连接状态卡 ---- */
+/* ---- 来源卡：连接状态卡（min-height 锁定三种来源卡等高，切 tab 不跳动） ---- */
 .specx-conn {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-top: auto;
+  min-height: 56px;
   padding: 10px 12px;
   border-radius: 10px;
   background: var(--primary-soft);
@@ -9224,6 +9640,7 @@ body.batch-bar-active .back-top-btn {
 
 .specx-conn-main b {
   font-size: 13px;
+  line-height: 18px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -9231,7 +9648,12 @@ body.batch-bar-active .back-top-btn {
 
 .specx-conn-main span {
   font-size: 11px;
+  line-height: 15px;
   color: var(--text-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .specx-conn-state {
@@ -9247,6 +9669,59 @@ body.batch-bar-active .back-top-btn {
 
 .specx-conn.none .specx-conn-state {
   color: var(--text-3);
+}
+
+/* 本地源文件组：多行包裹容器接管推底（.specx-conn 自身 margin-top: auto 让位） */
+.specx-localsrc {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: auto;
+}
+
+.specx-localsrc .specx-conn {
+  margin-top: 0;
+}
+
+/* 本地源文件变体：中性灰底，与在线连接（蓝/橙）区分 */
+.specx-conn.local {
+  background: var(--fill);
+  border-color: var(--border);
+}
+
+.specx-conn.local .specx-conn-logo {
+  background: #64748b;
+}
+
+.specx-conn.local .specx-conn-state {
+  color: var(--text-2);
+}
+
+/* 本地源文件卡删除按钮：默认隐藏，悬停卡片时显现 */
+.specx-conn-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.specx-conn.local:hover .specx-conn-del {
+  opacity: 1;
+}
+
+.specx-conn-del:hover {
+  background: rgba(220, 38, 38, 0.12);
+  color: var(--danger);
 }
 
 /* ---- 版本卡 ---- */
@@ -9760,18 +10235,33 @@ body.batch-bar-active .back-top-btn {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
   text-align: center;
   padding: 48px 20px;
 }
 
+.specx-empty::before {
+  content: "";
+  width: 300px;
+  height: calc(300px * 960 / 1637);
+  flex-shrink: 0;
+  margin-bottom: 8px;
+  background: url(../assets/empty-state.png) center/contain no-repeat;
+}
+
 .specx-empty h3 {
+  margin: 0;
   font-size: 14px;
 }
 
+/* 标题与描述两段文案间距收紧 */
 .specx-empty p {
+  margin: 6px 0 0;
   font-size: 12.5px;
   color: var(--text-2);
+}
+
+.specx-empty .btn-primary {
+  margin-top: 16px;
 }
 
 /* ---- 页头端类型图标 ---- */
@@ -10435,6 +10925,24 @@ body.batch-bar-active .back-top-btn {
   color: #4ade80;
 }
 
+[data-theme='dark'] .specx-conn.local .specx-conn-logo {
+  background: #94a3b8;
+  color: #0f172a;
+}
+
+/* Figma 链接卡 icon 底色：浅色模式用深色底、深色模式用浅色底，衬托彩色 Figma logo */
+.specx-conn.local .specx-conn-logo.figma {
+  background: #1e293b;
+}
+
+[data-theme='dark'] .specx-conn.local .specx-conn-logo.figma {
+  background: #f1f5f9;
+}
+
+[data-theme='dark'] .specx-conn-del:hover {
+  background: rgba(248, 113, 113, 0.16);
+}
+
 /* ---- 总览页深色适配 ---- */
 [data-theme='dark'] .specx-banner {
   /* 与项目列表横幅深色一致：夜蓝渐变底，描边去掉（transparent 保留 1px 占位） */
@@ -10677,9 +11185,14 @@ body:has(.ai-assistant-fab) .back-top-btn {
 .ai-chat-body {
   flex: 1;
   overflow-y: auto;
+  scrollbar-width: none;
   padding: 14px;
   display: flex;
   flex-direction: column;
+}
+/* 对话区隐藏滚动滑块（仅滚轮/拖拽查看） */
+.ai-chat-body::-webkit-scrollbar {
+  display: none;
 }
 .ai-chat-loading {
   margin: auto;
@@ -10794,6 +11307,8 @@ body:has(.ai-assistant-fab) .back-top-btn {
   width: 100%;
   height: 100%;
   display: block;
+  /* 头像左右镜像：面朝右侧气泡方向 */
+  transform: scaleX(-1);
 }
 .ai-bubble {
   position: relative;
@@ -10854,6 +11369,67 @@ body:has(.ai-assistant-fab) .back-top-btn {
 }
 .ai-bubble-copy:hover {
   color: var(--primary);
+}
+/* 消息内 markdown 表格 */
+.ai-msg-table {
+  width: 100%;
+  margin: 6px 0;
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: normal;
+}
+.ai-msg-table th,
+.ai-msg-table td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.ai-msg-table th {
+  background: var(--card-bg);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ai-msg-table tbody tr:nth-child(2n) {
+  background: rgba(127, 127, 127, 0.07);
+}
+/* 思考中：文案 + 三点跳动 */
+.ai-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+}
+.ai-thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.ai-thinking-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--primary);
+  opacity: 0.35;
+  animation: ai-dot-bounce 1.2s ease-in-out infinite;
+}
+.ai-thinking-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.ai-thinking-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes ai-dot-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
 }
 .ai-bubble-streaming .ai-bubble-text {
   min-height: 18px;

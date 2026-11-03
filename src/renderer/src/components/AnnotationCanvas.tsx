@@ -496,6 +496,7 @@ export default function AnnotationCanvas({
                 >
                   {num}
                 </text>
+                {/* 测量值文字标签：同样支持点击打开详情 / 拖拽移动 */}
                 <text
                   className={`anno-measure-label ${statusCls}${flashCls}${focusCls}`}
                   x={pct(mx)}
@@ -504,8 +505,9 @@ export default function AnnotationCanvas({
                   dy={vertical ? 0 : -9}
                   textAnchor={vertical ? 'start' : 'middle'}
                   dominantBaseline="central"
-                  pointerEvents="none"
+                  pointerEvents="auto"
                   style={useCustom ? { fill: issue.color! } : undefined}
+                  onMouseDown={editHandler(issue)}
                 >
                   {issue.measureValue || `${Math.round(Math.hypot(R.width, R.height) * 1000)}px`}
                 </text>
