@@ -5,7 +5,7 @@
  * - 每个匹配对只输出一条合并标注（N 项细节并入描述），避免同元素多框重叠
  * - 颜色类差异附带开发侧色值（colorHex），渲染为色值标注
  */
-import type { MatchPair, StyleDiff, ToleranceConfig } from '../shared/types'
+import type { MatchPair, StyleDiff, StructuredChecksConfig, ToleranceConfig } from '../shared/types'
 import { colorDeltaE, parseColor, rgbaLabel, rgbToHex } from '../shared/color'
 
 /** 单页差异上限，防止异常页面刷屏 */
@@ -45,10 +45,18 @@ interface RawDiff {
   designValue: string
   devValue: string
   colorHex?: string
+  note?: string
 }
 
-/** 单个匹配对的属性级比对（宽松规则）；includeSizeSpacing=false 时跳过宽高与内边距/间距（仅严格模式比对） */
-function diffPair(pair: MatchPair, tol: ToleranceConfig, includeSizeSpacing: boolean): RawDiff[] {
+/** 单个匹配对的属性级比对（宽松规则）；includeSizeSpacing=false 时跳过宽高与内边距/间距（仅严格模式比对）；
+ *  exemptOut 收集豁免差异（父容器裁剪圆角等），不进主列表；checks 缺省 = 旧行为 */
+function diffPair(
+  pair: MatchPair,
+  tol: ToleranceConfig,
+  includeSizeSpacing: boolean,
+  exemptOut: RawDiff[] = [],
+  checks?: StructuredChecksConfig
+): RawDiff[] {
   const out: RawDiff[] = []
   const d = pair.design
   const m = pair.dom
@@ -71,8 +79,28 @@ function diffPair(pair: MatchPair, tol: ToleranceConfig, includeSizeSpacing: boo
       devValue: px(mv)
     })
   }
-  if (includeSizeSpacing) {
+  // 宽度比对（hug 分流）：checks 缺省 = 旧调用方 = 完全旧行为；text-content 模式下
+  // 设计侧宽度自适应（Hug 文本）改比 DOM 侧文字渲染宽，固定宽度包裹文本不再误报容器宽
+  const checkWidth = (): void => {
+    const textContentMode = checks !== undefined && checks.hugWidthMode !== 'strict'
+    if (textContentMode && d.hugWidth && m.textContentWidth !== undefined) {
+      const diff = Math.abs(d.width - m.textContentWidth)
+      if (diff <= tol.size) return
+      push({
+        category: 'style',
+        severity: severityByRatio(diff / Math.max(d.width, 1), 0.25, 0.12),
+        property: 'width',
+        label: '文字内容宽',
+        designValue: px(d.width),
+        devValue: px(m.textContentWidth),
+        note: '设计侧为宽度自适应（Hug）文本，已按文字渲染宽度比对，不比较容器宽度'
+      })
+      return
+    }
     checkSize('width', '宽度', d.width, m.width)
+  }
+  if (includeSizeSpacing) {
+    checkWidth()
     checkSize('height', '高度', d.height, m.height)
   }
 
@@ -147,24 +175,46 @@ function diffPair(pair: MatchPair, tol: ToleranceConfig, includeSizeSpacing: boo
     checkSpacing('gap', '元素间距', d.gap, m.gap)
   }
 
-  // ===== 圆角（阈值放宽：≥2px 才比对）=====
+  // ===== 圆角（增强：百分比换算 + 父容器裁剪追溯；豁免项不进主列表、不扣分）=====
   if (d.borderRadius?.length) {
     const dr = d.borderRadius
-    const mr = m.borderRadius ?? [0, 0, 0, 0]
+    const mrRaw = m.borderRadius
+    const mr = mrRaw ?? [0, 0, 0, 0]
     const maxDiff = Math.max(...dr.map((v, i) => Math.abs(v - (mr[i] ?? 0))))
-    if (maxDiff > Math.max(tol.radius, 2)) {
+    // 缺省（旧调用方未传 checks）= 完全旧行为；仅显式 radiusCheck: true 走增强
+    const enhanced = checks?.radiusCheck === true
+    // 旧行为阈值保留 Math.max(tol.radius, 2) 二次放宽；增强模式复用容差配置不再叠加
+    if (maxDiff > (enhanced ? tol.radius : Math.max(tol.radius, 2))) {
       const fmtR = (arr: number[]): string => {
         const all = arr.every((v) => Math.abs(v - arr[0]) < 0.01)
         return all ? px(arr[0]) : arr.map(px).join(' ')
       }
-      push({
-        category: 'style',
-        severity: maxDiff >= 6 ? 'major' : 'minor',
-        property: 'border-radius',
-        label: '圆角',
-        designValue: fmtR(dr),
-        devValue: m.borderRadius ? fmtR(mr) : '未设置'
-      })
+      // 来源判定：采集侧显式标注优先；旧数据兜底（有 borderRadius 即视为自身设置）
+      const source = m.radiusSource ?? (mrRaw ? 'self' : 'none')
+      if (enhanced && source === 'parent-clip') {
+        exemptOut.push({
+          category: 'style',
+          severity: 'suggestion',
+          property: 'border-radius',
+          label: '圆角（父容器裁剪）',
+          designValue: fmtR(dr),
+          devValue: fmtR(mr),
+          note: `该圆角由父容器 ${m.radiusParentPath ?? ''} 的 overflow 裁剪形成，非元素自身设置；父容器层级已单独比对`
+        })
+      } else {
+        const notes: string[] = []
+        if (enhanced && source === 'none') notes.push('开发侧元素及其父级均未设置圆角')
+        if (enhanced && m.radiusPercent) notes.push('开发侧为百分比圆角，已按元素短边换算为 px 比对')
+        push({
+          category: 'style',
+          severity: maxDiff >= 6 ? 'major' : 'minor',
+          property: 'border-radius',
+          label: '圆角',
+          designValue: fmtR(dr),
+          devValue: mrRaw ? fmtR(mr) : '未设置',
+          ...(notes.length ? { note: notes.join('；') } : {})
+        })
+      }
     }
   }
 
@@ -175,33 +225,29 @@ function diffPair(pair: MatchPair, tol: ToleranceConfig, includeSizeSpacing: boo
  * 全部匹配对 → 差异列表：
  * 每个匹配对合并为一条标注（避免同元素多框重叠），
  * 颜色差异存在时优先归类为颜色规范并附带色值。
+ * 豁免项（父容器裁剪圆角等）不进主列表、不扣分，经 exemptDiffs 独立通道返回（详情面板折叠查看）。
  */
 export function computeDiffs(
   pairs: MatchPair[],
   tolerance: ToleranceConfig,
   viewport: { width: number; height: number },
-  includeSizeSpacing = true
-): StyleDiff[] {
+  includeSizeSpacing = true,
+  checks?: StructuredChecksConfig
+): { diffs: StyleDiff[]; exemptDiffs: StyleDiff[] } {
   const order: Record<Severity, number> = { major: 0, minor: 1, suggestion: 2 }
-  const out: StyleDiff[] = []
-  for (const pair of pairs) {
-    const raws = diffPair(pair, tolerance, includeSizeSpacing)
-    if (raws.length === 0) continue
-    const sorted = [...raws].sort((a, b) => order[a.severity] - order[b.severity])
-    const top = sorted[0]
-    const colorItem = raws.find((r) => r.category === 'color')
-    const name = pair.design.name || pair.dom.name || '元素'
-    const details = raws.map((r) => `${r.label} ${r.designValue} → ${r.devValue}`).join('；')
+
+  const toStyleDiff = (pair: MatchPair, raw: RawDiff, description: string): StyleDiff => {
     const dom = pair.dom
-    out.push({
-      category: top.category,
-      severity: top.severity,
-      property: raws.map((r) => r.property).join(','),
-      label: `${raws.length} 项样式`,
-      designValue: top.designValue,
-      devValue: top.devValue,
-      colorHex: colorItem?.colorHex,
-      description: `「${name}」整体样式不一致（${raws.length} 项）：${details}`,
+    return {
+      category: raw.category,
+      severity: raw.severity,
+      property: raw.property,
+      label: raw.label,
+      designValue: raw.designValue,
+      devValue: raw.devValue,
+      colorHex: raw.colorHex,
+      note: raw.note,
+      description,
       figmaNodeId: pair.design.figmaNodeId,
       domPath: dom.domPath,
       matchConfidence: pair.confidence,
@@ -211,8 +257,41 @@ export function computeDiffs(
         width: Math.max(0.004, Math.min(1, dom.width / viewport.width)),
         height: Math.max(0.004, Math.min(1, dom.height / viewport.height))
       }
-    })
+    }
+  }
+
+  const out: StyleDiff[] = []
+  const exempt: StyleDiff[] = []
+  for (const pair of pairs) {
+    const pairExempt: RawDiff[] = []
+    const raws = diffPair(pair, tolerance, includeSizeSpacing, pairExempt, checks)
+    const name = pair.design.name || pair.dom.name || '元素'
+    for (const raw of pairExempt) {
+      exempt.push(
+        toStyleDiff(
+          pair,
+          raw,
+          `「${name}」${raw.label}：设计 ${raw.designValue}，开发侧 ${raw.devValue}。${raw.note ?? ''}`
+        )
+      )
+    }
+    if (raws.length === 0) continue
+    const sorted = [...raws].sort((a, b) => order[a.severity] - order[b.severity])
+    const top = sorted[0]
+    const colorItem = raws.find((r) => r.category === 'color')
+    const details = raws.map((r) => `${r.label} ${r.designValue} → ${r.devValue}`).join('；')
+    const noteRaw = raws.find((r) => r.note)?.note
+    const merged = toStyleDiff(
+      pair,
+      top,
+      `「${name}」整体样式不一致（${raws.length} 项）：${details}${noteRaw ? `（${noteRaw}）` : ''}`
+    )
+    merged.property = raws.map((r) => r.property).join(',')
+    merged.label = `${raws.length} 项样式`
+    if (colorItem?.colorHex) merged.colorHex = colorItem.colorHex
+    out.push(merged)
   }
   out.sort((a, b) => order[a.severity] - order[b.severity] || b.matchConfidence - a.matchConfidence)
-  return out.slice(0, MAX_DIFFS)
+  exempt.sort((a, b) => order[a.severity] - order[b.severity] || b.matchConfidence - a.matchConfidence)
+  return { diffs: out.slice(0, MAX_DIFFS), exemptDiffs: exempt.slice(0, MAX_DIFFS) }
 }

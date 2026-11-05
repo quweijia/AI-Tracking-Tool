@@ -37,7 +37,16 @@ export const SYSTEM_PROMPT = `你是「UI 走查工具」内置的 AI 走查助�
 
 /** 快捷按钮预设（label 为中文兜底文案，面板优先取 i18n aiAssistant.quick.<key>） */
 export interface QuickPrompt {
-  key: 'explainIssues' | 'reportSummary' | 'specCheck' | 'devMessage' | 'searchHistory'
+  key:
+    | 'explainIssues'
+    | 'reportSummary'
+    | 'specCheck'
+    | 'devMessage'
+    | 'searchHistory'
+    | 'prioritySort'
+    | 'tokenViolations'
+    | 'fixPlan'
+    | 'ignoreAudit'
   label: string
   prompt: string
 }
@@ -68,14 +77,43 @@ export const QUICK_PROMPTS: QuickPrompt[] = [
     key: 'searchHistory',
     label: '检索历史',
     prompt: '请检索历史记录：列出本项目的历史报告和遗留问题，对比当前问题哪些是新增、哪些是未整改的旧问题。'
+  },
+  {
+    key: 'prioritySort',
+    label: '整改优先级排序',
+    prompt:
+      '请对本页真实缺陷按整改优先级排序：综合考虑严重度、影响面和修复成本，输出从高到低的整改顺序清单，每条附一句理由。'
+  },
+  {
+    key: 'tokenViolations',
+    label: 'Token 违规清单',
+    prompt:
+      '请输出本页违反规范 Token 的问题清单：按 Token 分组（颜色/间距/字号/行高/圆角/阴影/边框），列出问题 ID、现状值和应使用的 Token 名与取值。'
+  },
+  {
+    key: 'fixPlan',
+    label: '整改改法建议',
+    prompt:
+      '请为本页真实缺陷逐条给出具体改法：说明应改哪个属性、改成什么值（对齐 Token 取值）、是否需要设计确认，方便前端直接照做。'
+  },
+  {
+    key: 'ignoreAudit',
+    label: '忽略合理性审查',
+    prompt:
+      '请审查本页已忽略或设计确认不改的问题：逐条判断忽略理由是否成立，标出其中可能被误忽略、建议复核的问题及原因。'
   }
 ]
 
-/** 空状态推荐问题池（快捷 5 条 + 扩展 5 条，「换一批」随机抽 5 条展示） */
+/** 空状态推荐问题池（快捷 9 条 + 扩展 10 条，「换一批」随机抽 5 条展示） */
 export const EXTRA_SUGGESTS: string[] = [
   '本页哪个问题最严重？先改哪一个？',
   '列出本页所有颜色类问题及建议取值',
   '哪些问题已经被忽略或设计确认不改？',
   '帮我把本页问题按分类统计成一张表',
-  '本页的还原质量整体打几分？主要失分点在哪？'
+  '本页的还原质量整体打几分？主要失分点在哪？',
+  '帮我整理一份可直接发给开发的整改清单',
+  '本页间距类问题有哪些？应使用哪些间距 Token？',
+  '哪些问题属于容差噪声，可以放心忽略？',
+  '对比上一份报告，本页整改进展如何？',
+  '本页问题集中在哪些区域？有规律吗？'
 ]

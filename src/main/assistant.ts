@@ -25,29 +25,69 @@ function getModel(modelId: string): AIModelConfig {
   return model
 }
 
-/** 解析 SSE data 行，返回本段增量 content 与 finish_reason */
-function sseDelta(payload: string): { delta: string; finishReason: string } {
-  if (payload === '[DONE]') return { delta: '', finishReason: '' }
+/** 解析 SSE data 行，返回本段增量 content、思考过程 reasoning 与 finish_reason */
+function sseDelta(payload: string): { delta: string; reasoning: string; finishReason: string } {
+  if (payload === '[DONE]') return { delta: '', reasoning: '', finishReason: '' }
   try {
-    const j = JSON.parse(payload) as { choices?: { delta?: { content?: unknown }; finish_reason?: unknown }[] }
+    const j = JSON.parse(payload) as {
+      choices?: { delta?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown }; finish_reason?: unknown }[]
+    }
     const c = j.choices?.[0]
+    const d = c?.delta
     return {
-      delta: typeof c?.delta?.content === 'string' ? c.delta.content : '',
+      delta: typeof d?.content === 'string' ? d.content : '',
+      // 思考过程：DeepSeek 风格 reasoning_content 优先，兼容 reasoning 字段
+      reasoning:
+        typeof d?.reasoning_content === 'string'
+          ? d.reasoning_content
+          : typeof d?.reasoning === 'string'
+            ? d.reasoning
+            : '',
       finishReason: c?.finish_reason ? String(c.finish_reason) : ''
     }
   } catch {
     // 忽略不完整或非 JSON 行
-    return { delta: '', finishReason: '' }
+    return { delta: '', reasoning: '', finishReason: '' }
   }
 }
 
 /** 进行中的助手请求（reqId → 控制器），ai:assistant:abort 中断用 */
 const pending = new Map<string, AbortController>()
 
+/** 提示词优化 meta-prompt：把用户草稿改写为更清晰的走查提问，不改变原意 */
+const OPTIMIZE_SYSTEM_PROMPT = `你是「UI 走查工具」AI 助手的提示词优化器。用户会给你一段他想问走查助手的草稿提问，请把它改写为一条更清晰、更具体、可直接执行的提问。
+
+要求：
+- 保持用户的原意和意图，不添加用户没提的需求
+- 明确提问对象（本页问题/当前报告/规范 Token/历史记录），草稿含糊时按 UI 走查场景补全为合理默认
+- 补充可执行的产出要求（如：标注优先级、列出问题 ID、统计分类占比、给出建议取值）
+- 只输出优化后的提问正文，不要任何解释、前后缀或引号
+- 保持中文，长度控制在 200 字以内`
+
 interface AssistantChatInput {
   reqId: string
   modelId: string
   messages: { role: 'system' | 'user' | 'assistant'; content: string }[]
+}
+
+/** 提示词优化请求入参（非流式，一次性返回） */
+interface AssistantOptimizeInput {
+  modelId: string
+  draft: string
+}
+
+/** 非流式错误映射（与流式链路一致的文案） */
+function httpErrorMessage(status: number, url: string, body: string): string {
+  if (status === 401 || status === 403) {
+    return `API Key 无效或无权限（${status}）：请到「设置 → AI 模型管理」检查 Key`
+  }
+  if (status === 404) {
+    return `接口返回 404：${url} 不存在。请检查 Base URL 是否需要以 /v4 结尾（如智谱 https://open.bigmodel.cn/api/paas/v4）`
+  }
+  if (status === 429) {
+    return '请求频率超限（429）：请稍后重试，或检查模型服务额度'
+  }
+  return `接口返回 ${status}${body ? `：${body.slice(0, 300)}` : ''}`
 }
 
 function registerAssistantHandlers(): void {
@@ -56,7 +96,7 @@ function registerAssistantHandlers(): void {
     'ai:assistant:chat',
     async (e, input: AssistantChatInput): Promise<{ ok: boolean; aborted?: boolean; message: string }> => {
       const { reqId } = input
-      const send = (chunk: { delta: string; done?: boolean; error?: string }): void =>
+      const send = (chunk: { delta: string; reasoning?: string; done?: boolean; error?: string }): void =>
         e.sender.send('ai:assistant:chunk', { reqId, ...chunk })
       let ctrl: AbortController | undefined
       let timer: NodeJS.Timeout | undefined
@@ -140,7 +180,8 @@ function registerAssistantHandlers(): void {
           for (const line of lines) {
             const t = line.trim()
             if (!t.startsWith('data:')) continue
-            const { delta } = sseDelta(t.slice(5).trim())
+            const { delta, reasoning } = sseDelta(t.slice(5).trim())
+            if (reasoning) send({ reasoning })
             if (delta) {
               content += delta
               send({ delta })
@@ -178,6 +219,71 @@ function registerAssistantHandlers(): void {
     ctrl.abort()
     return true
   })
+
+  // 提示词优化：把输入框草稿交给模型改写为更清晰的提问（非流式，一次性返回，不进对话记录）
+  ipcMain.handle(
+    'ai:assistant:optimize',
+    async (_e, input: AssistantOptimizeInput): Promise<{ ok: boolean; text?: string; message: string }> => {
+      let ctrl: AbortController | undefined
+      let timer: NodeJS.Timeout | undefined
+      try {
+        const model = getModel(input.modelId)
+        const draft = typeof input.draft === 'string' ? input.draft.trim() : ''
+        if (!draft) throw new Error('请先在输入框输入要优化的内容')
+        ctrl = new AbortController()
+        // 优化为短文本生成，120s 足够
+        timer = setTimeout(() => ctrl?.abort(), 120000)
+        const init = {
+          method: 'POST' as const,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${model.apiKey}`
+          },
+          body: JSON.stringify({
+            model: model.model,
+            messages: [
+              { role: 'system', content: OPTIMIZE_SYSTEM_PROMPT },
+              { role: 'user', content: draft }
+            ],
+            max_tokens: 1024,
+            temperature: 0.3,
+            stream: false
+          }),
+          signal: ctrl.signal
+        }
+        let res: Response
+        try {
+          // 先直连，网络层失败再走代理链重试（与流式对话一致）
+          res = await fetch(chatUrl(model.baseUrl), init)
+        } catch (err) {
+          if (ctrl.signal.aborted) throw new Error('请求超时，请检查模型服务是否可达')
+          try {
+            res = await proxyFetch(chatUrl(model.baseUrl), init)
+          } catch {
+            throw new Error(
+              `网络请求失败（${err instanceof Error ? err.message : String(err)}）：模型服务不可达。请确认 Base URL 正确；若模型服务在外网，可在「设置 → MCP 管理」配置代理地址后重试`
+            )
+          }
+        }
+        if (!res.ok) {
+          const text = await res.text().catch(() => '')
+          throw new Error(httpErrorMessage(res.status, chatUrl(model.baseUrl), text))
+        }
+        const j = (await res.json()) as { choices?: { message?: { content?: unknown } }[] }
+        const content = j.choices?.[0]?.message?.content
+        const out = typeof content === 'string' ? content.trim() : ''
+        if (!out) throw new Error('模型返回内容为空')
+        return { ok: true, text: out, message: '完成' }
+      } catch (err) {
+        if (ctrl?.signal.aborted) {
+          return { ok: false, message: '请求超时：提示词优化未在限定时间内完成，请重试' }
+        }
+        return { ok: false, message: err instanceof Error ? err.message : String(err) }
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+    }
+  )
 }
 
 export { registerAssistantHandlers }

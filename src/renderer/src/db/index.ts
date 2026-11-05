@@ -289,6 +289,8 @@ export interface AssistantMessage {
   content: string
   /** 用户消息携带的 @引用快照（assistant 消息无此字段） */
   refs?: AssistantRef[]
+  /** assistant 消息的思考过程（模型 reasoning 输出，无则缺省） */
+  reasoning?: string
   createdAt: number
 }
 

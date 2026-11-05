@@ -49,7 +49,8 @@ export default {
   'page.viewReportTip': 'Click to view the report',
   'page.totalIssues': '{{n}} issues in total',
   'page.deleteRecordTip': 'Delete record',
-  'page.confirmDeleteRecord': 'Delete this export record?',
+  'page.openFolderTip': 'Show in folder',
+  'page.confirmDeleteRecord': 'Delete this export record? The local report file will also be moved to the Trash.',
   'page.confirmAccept':
     'Mark page "{{name}}" as accepted?\nThe page status in the analysis report list will be shown as Completed.',
   'page.confirmRevokeAccept':
@@ -66,6 +67,7 @@ export default {
   'msg.exportedWithMsg': 'Exported ({{msg}})',
   'msg.exportedToPath': 'Exported: {{path}}',
   'msg.exportFailed': 'Export failed: {{msg}}',
+  'msg.openFolderFailed': 'Failed to open folder. The file may no longer exist',
   'msg.unknownError': 'Unknown error',
   'msg.pageDataNotLoaded': 'Page data not loaded',
   'msg.createFailed': 'Failed to create {{name}}: {{msg}}',
@@ -125,6 +127,10 @@ export default {
   'exportedHtml.detailInfoTitle': 'Issue Info',
   'exportedHtml.detailRespondTitle': 'Respond',
   'exportedHtml.detailQuestion': 'Has this issue been fixed?',
+  'exportedHtml.detailMeasure': 'Measurement',
+  'exportedHtml.detailColor': 'Sampled Colors',
+  'exportedHtml.detailSize': 'Annotation Size',
+  'exportedHtml.detailSkill': 'Matched Skills',
   'exportedHtml.blockPlaceholder':
     "Reason is required, e.g. API not supported yet, planned for a later release",
   'exportedHtml.submit': 'Submit',

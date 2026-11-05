@@ -10,8 +10,6 @@ const api = {
     ipcRenderer.invoke('file:readImage', relativePath),
   deleteImage: (relativePath: string): Promise<boolean> =>
     ipcRenderer.invoke('file:deleteImage', relativePath),
-  /** 用系统默认应用打开文件/目录（导出报告后快速查看） */
-  openFile: (targetPath: string): Promise<string> => ipcRenderer.invoke('file:open', targetPath),
   selectImage: (): Promise<{ relativePath: string; dataUrl: string } | null> =>
     ipcRenderer.invoke('file:selectImage'),
   exportReport: (
@@ -62,6 +60,12 @@ const api = {
   // 分析报告：用内置浏览器打开本地导出的 HTML 报告文件
   openReportBuiltin: (filePath: string): Promise<{ ok: boolean; message: string }> =>
     ipcRenderer.invoke('report:openBuiltin', filePath),
+  // 导出历史：在系统文件管理器中定位报告文件（true = 已定位）
+  showInFolder: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('file:showInFolder', filePath),
+  // 导出历史：删除记录时把本地 HTML 报告文件移入废纸篓
+  deleteReportFile: (filePath: string): Promise<{ ok: boolean; message: string }> =>
+    ipcRenderer.invoke('file:deleteReport', filePath),
   // 清除内置浏览器（persist:walkthrough 分区）的浏览数据：Cookies / 本地存储 / 缓存等
   clearBrowserData: (): Promise<{ ok: boolean; message: string }> =>
     ipcRenderer.invoke('browser:clearData'),
@@ -273,6 +277,8 @@ const api = {
     unmatchedDomCount: number
     /** 分层误差旁路判定结果（分层开关开启时返回） */
     layered?: LayeredRunSummary
+    /** 圆角父级裁剪豁免项（结构化对比增强开启且圆角追溯生效时返回，仅旁路展示） */
+    exemptDiffs?: StyleDiff[]
   }> => ipcRenderer.invoke('walkthrough:compare', input),
   // ===== 客观走查门（ux-ui-agent-skills vendor）=====
   /** 列出全部可用 gate（名称 / 是否需浏览器 / 测量内容） */
@@ -311,15 +317,18 @@ const api = {
   aiAssistantAbort: (reqId: string): Promise<boolean> => ipcRenderer.invoke('ai:assistant:abort', reqId),
   /** 助手流式 delta 事件（返回取消订阅） */
   onAssistantChunk: (
-    cb: (chunk: { reqId: string; delta: string; done?: boolean; error?: string }) => void
+    cb: (chunk: { reqId: string; delta: string; reasoning?: string; done?: boolean; error?: string }) => void
   ): (() => void) => {
     const listener = (
       _e: Electron.IpcRendererEvent,
-      chunk: { reqId: string; delta: string; done?: boolean; error?: string }
+      chunk: { reqId: string; delta: string; reasoning?: string; done?: boolean; error?: string }
     ): void => cb(chunk)
     ipcRenderer.on('ai:assistant:chunk', listener)
     return () => ipcRenderer.removeListener('ai:assistant:chunk', listener)
-  }
+  },
+  /** 提示词优化：把输入框草稿交给模型改写为更清晰的提问（非流式，一次性返回） */
+  aiAssistantOptimize: (input: { modelId: string; draft: string }): Promise<{ ok: boolean; text?: string; message: string }> =>
+    ipcRenderer.invoke('ai:assistant:optimize', input)
 }
 
 export type ElectronAPI = typeof api

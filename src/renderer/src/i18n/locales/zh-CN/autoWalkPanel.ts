@@ -5,6 +5,10 @@ export default {
   tool_point: '点位标注：点击结果图放置标记',
   tool_rect: '框选：拖拽框选问题区域',
   tool_text: '文字标注：点击结果图添加文字标注',
+  tool_measure: '测量：拖拽两点测量尺寸（直接生成标注）',
+  tool_picker: '吸色：点击取样颜色并标注色值（直接生成标注）',
+  quickMeasureDesc: '尺寸测量 {{px}}',
+  quickPickerDesc: '颜色取样 {{hex}}',
   zoom_out: '缩小',
   zoom_in: '放大',
   // 技能选择（自动走查接入 SkillHub）
@@ -103,6 +107,8 @@ export default {
   unmatched: '未匹配设计稿图层 {{d}} 个 / 未匹配页面元素 {{e}} 个',
   layeredSummary: '分层还原度 {{score}} 分 ｜ 模块吸收 {{moduleAbsorbed}} · 元素上报 {{elementReported}}',
   layeredDetail: '查看明细',
+  exemptSummary: '圆角父级裁剪豁免 {{count}} 项',
+  exemptDetail: '查看豁免项',
   sep: '；',
   selfUrlErr: '不能加载应用自身地址（内置浏览器会嵌套加载本应用导致假死），请填写研发页面的真实 URL',
   // 程序轨校验（Token 合规 / 元素清单 / 无障碍）

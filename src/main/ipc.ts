@@ -1,4 +1,4 @@
-import { app, ipcMain, dialog, shell } from 'electron'
+import { app, ipcMain, dialog } from 'electron'
 import { join, dirname } from 'path'
 import { tmpdir } from 'os'
 import { execFile } from 'child_process'
@@ -26,10 +26,12 @@ import { computeDiffs } from './diff'
 import { computeLayered } from './layered'
 import {
   LAYERED_TOLERANCE_KEY,
+  STRUCTURED_CHECKS_KEY,
   normalizeLayeredTolerance,
+  normalizeStructuredChecks,
   normalizeTolerance
 } from '../shared/types'
-import type { LayeredToleranceConfig } from '../shared/types'
+import type { LayeredToleranceConfig, StructuredChecksConfig } from '../shared/types'
 
 const MIME: Record<string, string> = {
   png: 'image/png',
@@ -136,7 +138,8 @@ export function registerIpcHandlers(): void {
   })
 
   // 导出 HTML 报告到用户选择的位置。
-  // 若目标位置无写入权限（如系统目录受限），自动降级到应用数据目录/临时目录，保证报告一定导得出来
+  // 若目标位置无写入权限（如系统目录受限），自动降级到应用数据目录/临时目录，保证报告一定导得出来。
+  // 不自动打开文件：由渲染层按设置页「AI 任务默认浏览器」决定用内置浏览器或系统浏览器打开
   ipcMain.handle(
     'file:exportReport',
     async (
@@ -169,7 +172,6 @@ export function registerIpcHandlers(): void {
         try {
           mkdirSync(dirname(attempts[i]), { recursive: true })
           writeFileSync(attempts[i], html, 'utf-8')
-          shell.openPath(attempts[i])
           return {
             ok: true,
             canceled: false,
@@ -226,13 +228,6 @@ export function registerIpcHandlers(): void {
       return { ok: false, canceled: false, path: null, fallback: false, message: lastError }
     }
   )
-
-  // 用系统默认应用打开文件/目录（导出报告后快速查看）
-  ipcMain.handle('file:open', (_e, targetPath: string) => {
-    const p = String(targetPath ?? '').trim()
-    if (!p) return false
-    return shell.openPath(p)
-  })
 
   // Figma REST 只读读取（图层样式树 + Frame 截图），PAT 复用 MCP 配置令牌；先应用 MCP 自定义代理
   ipcMain.handle('figma:fetchDesign', (_e, input: { pat: string; figmaUrl?: string; scale?: number }) => {
@@ -308,13 +303,23 @@ export function registerIpcHandlers(): void {
       const { designRoot, domRoot, viewport } = input
       const tolerance = normalizeTolerance(input.tolerance)
       const { pairs, unmatchedDesignCount, unmatchedDomCount } = matchNodes(designRoot, domRoot)
-      const diffs = computeDiffs(pairs, tolerance, viewport, input.includeSizeSpacing !== false)
+      // 结构化对比增强（圆角 computed 修复等）：配置从默认值合并后透传 computeDiffs
+      const checksCfg = normalizeStructuredChecks(
+        getConfigData()[STRUCTURED_CHECKS_KEY] as Partial<StructuredChecksConfig> | undefined
+      )
+      const { diffs, exemptDiffs } = computeDiffs(
+        pairs,
+        tolerance,
+        viewport,
+        input.includeSizeSpacing !== false,
+        checksCfg
+      )
       // 分层误差旁路（v3）：开关关闭时不参与计算，返回值缺省 layered 字段，行为与现状一致
       const layeredCfg = normalizeLayeredTolerance(
         getConfigData()[LAYERED_TOLERANCE_KEY] as Partial<LayeredToleranceConfig> | undefined
       )
       const layered = layeredCfg.enabled ? computeLayered(pairs, layeredCfg, viewport) : undefined
-      return { ok: true, pairs, diffs, unmatchedDesignCount, unmatchedDomCount, layered }
+      return { ok: true, pairs, diffs, exemptDiffs, unmatchedDesignCount, unmatchedDomCount, layered }
     }
   )
 

@@ -17,10 +17,17 @@ export default {
   retry: '重试',
   loadingHistory: '加载对话记录…',
   thinking: '思考中…',
+  reasoningTitle: '思考过程',
   // 输入区
   inputPlaceholder: '输入问题，@ 引用项目/页面/报告/问题，Enter 发送',
   send: '发送',
   stop: '停止生成',
+  // 输入区底行模型选择器
+  modelFollow: '跟随全局默认',
+  modelPlaceholder: '选择模型',
+  optimize: '优化提示词',
+  optimizing: '优化中…',
+  stopOptimize: '停止优化',
   clear: '清空对话',
   clearTitle: '清空当前会话？',
   clearConfirm: '确认清空当前会话的全部对话记录吗？',

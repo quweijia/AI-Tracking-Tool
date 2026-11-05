@@ -1,6 +1,6 @@
 import { BrowserWindow, app, ipcMain, session, shell } from 'electron'
-import { join } from 'path'
-import { readdirSync, statSync } from 'fs'
+import { join, dirname } from 'path'
+import { existsSync, readdirSync, statSync } from 'fs'
 import { pathToFileURL } from 'url'
 
 /**
@@ -45,6 +45,12 @@ export function openDevBrowserPopup(url?: string): { ok: boolean; message: strin
   })
   popup.on('closed', () => {
     popup = null
+  })
+  // 弹窗内新窗口请求（报告里的 target=_blank / window.open）统一拦截：
+  // 转回内置浏览器导航（复用同一弹窗），不创建新窗口、不经系统浏览器打开
+  popup.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url) || /^file:\/\//i.test(url)) openDevBrowserPopup(url)
+    return { action: 'deny' }
   })
   void popup.loadURL(popupPageUrl(target || undefined))
   return { ok: true, message: '已打开开发浏览器窗口' }
@@ -146,4 +152,33 @@ export function registerBrowserHandlers(): void {
     if (!filePath?.trim()) return { ok: false, message: '缺少报告文件路径' }
     return openDevBrowserPopup(pathToFileURL(filePath.trim()).href)
   })
+  // 导出历史：在系统文件管理器（Finder/资源管理器）中定位报告文件。
+  // 文件不存在（被手动删除/移动）时兜底打开其所在目录，避免静默无反应
+  ipcMain.handle('file:showInFolder', (_e, filePath: string): boolean => {
+    try {
+      const p = filePath?.trim()
+      if (!p) return false
+      if (existsSync(p)) shell.showItemInFolder(p)
+      else void shell.openPath(dirname(p))
+      return true
+    } catch {
+      return false
+    }
+  })
+  // 导出历史：删除记录时把本地 HTML 报告文件移入系统废纸篓（可恢复）；文件已不存在视为成功
+  ipcMain.handle(
+    'file:deleteReport',
+    async (_e, filePath: string): Promise<{ ok: boolean; message: string }> => {
+      try {
+        const p = filePath?.trim()
+        if (!p) return { ok: false, message: '缺少报告文件路径' }
+        if (!/\.html?$/i.test(p)) return { ok: false, message: '仅支持删除 HTML 报告文件' }
+        if (!existsSync(p)) return { ok: true, message: '' }
+        await shell.trashItem(p)
+        return { ok: true, message: '' }
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
 }

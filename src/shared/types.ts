@@ -39,6 +39,16 @@ export interface StyleNode {
   gap?: number
   /** 圆角（4 角，顺时针：左上/右上/右下/左下） */
   borderRadius?: number[]
+  /** 圆角来源：self = 元素自身设置；parent-clip = 父容器 overflow 裁剪继承（结构化比对豁免用） */
+  radiusSource?: 'self' | 'parent-clip'
+  /** radiusSource = 'parent-clip' 时，产出圆角的父容器选择器路径 */
+  radiusParentPath?: string
+  /** 开发侧圆角为百分比（border-radius: 50% 等），比对时已按元素短边换算为 px */
+  radiusPercent?: boolean
+  /** 设计侧宽度自适应：auto-layout 容器 layoutSizingHorizontal=HUG 或文本 WIDTH_AND_HEIGHT；DOM 侧不设此字段 */
+  hugWidth?: boolean
+  /** DOM 侧直接文本子节点 Range 实测渲染宽度（多行取最宽行），hug 文本宽度比对用 */
+  textContentWidth?: number
   borderWidth?: number
   borderColor?: string
   boxShadow?: string
@@ -135,6 +145,8 @@ export interface StyleDiff {
   devValue: string
   /** 颜色类差异的开发侧色值（hex），渲染色值标注用 */
   colorHex?: string
+  /** 差异备注（圆角来源说明、百分比换算说明等），详情面板展示 */
+  note?: string
   /** 自动生成的差异描述 */
   description: string
   figmaNodeId?: string
@@ -220,6 +232,8 @@ export interface CompareResult {
   unmatchedDomCount: number
   /** 分层误差旁路结果（仅 walkLayeredTolerance.enabled=true 时返回，否则缺省） */
   layered?: LayeredRunSummary
+  /** 豁免差异（父容器裁剪圆角等，不进主列表、不扣分，详情面板折叠查看） */
+  exemptDiffs?: StyleDiff[]
 }
 
 /** ───────────── 分层误差模型（v3 旁路：容器/控件两级 × 位置/尺寸两维） ───────────── */
@@ -305,6 +319,33 @@ export function normalizeLayeredTolerance(
     weightElement: clampNum(merged.weightElement, DEFAULT_LAYERED_TOLERANCE.weightElement, 0, 1),
     weightPosition: clampNum(merged.weightPosition, DEFAULT_LAYERED_TOLERANCE.weightPosition, 0, 1),
     weightSize: clampNum(merged.weightSize, DEFAULT_LAYERED_TOLERANCE.weightSize, 0, 1)
+  }
+}
+
+/** ───────────── 结构化对比增强（圆角 computed 修复 / hug 文本宽度，结构化比对旁路配置） ───────────── */
+
+/** 结构化对比增强配置（持久化在 walkthrough-config.json 的 walkStructuredChecks 键） */
+export interface StructuredChecksConfig {
+  /** 圆角增强：百分比换算 + 父容器裁剪追溯（默认开启；关闭时回退旧行为） */
+  radiusCheck: boolean
+  /** hug 文本宽度比对模式：strict = 严格对比容器宽；text-content = hug 场景对比文字内容宽（推荐） */
+  hugWidthMode: 'strict' | 'text-content'
+}
+
+export const STRUCTURED_CHECKS_KEY = 'walkStructuredChecks'
+
+export const DEFAULT_STRUCTURED_CHECKS: StructuredChecksConfig = {
+  radiusCheck: true,
+  hugWidthMode: 'text-content'
+}
+
+/** 校正非法输入并合并默认值：radiusCheck 非显式 false 即开启；hugWidthMode 仅显式 'strict' 生效 */
+export function normalizeStructuredChecks(
+  raw: Partial<StructuredChecksConfig> | undefined
+): StructuredChecksConfig {
+  return {
+    radiusCheck: raw?.radiusCheck !== false,
+    hugWidthMode: raw?.hugWidthMode === 'strict' ? 'strict' : DEFAULT_STRUCTURED_CHECKS.hugWidthMode
   }
 }
 

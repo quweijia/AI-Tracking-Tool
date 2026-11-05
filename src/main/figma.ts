@@ -244,6 +244,10 @@ interface FigmaNode {
   rectangleCornerRadii?: number[]
   itemSpacing?: number
   layoutMode?: 'NONE' | 'HORIZONTAL' | 'VERTICAL'
+  /** auto-layout 水平尺寸模式：FIXED / HUG / FILL（HUG = 宽度自适应内容） */
+  layoutSizingHorizontal?: string
+  /** 文本自适应模式：NONE / HEIGHT / WIDTH_AND_HEIGHT / TRUNCATE */
+  textAutoResize?: string
   paddingLeft?: number
   paddingRight?: number
   paddingTop?: number
@@ -442,6 +446,13 @@ function walkNode(
       style.paddingBottom = node.paddingBottom || 0
       style.paddingLeft = node.paddingLeft || 0
     }
+  }
+  // 宽度自适应（Hug）：auto-layout 容器 HUG 或文本 WIDTH_AND_HEIGHT，宽度由内容决定（hug 文本宽度比对用）
+  if (
+    node.layoutSizingHorizontal === 'HUG' ||
+    (node.type === 'TEXT' && node.textAutoResize === 'WIDTH_AND_HEIGHT')
+  ) {
+    style.hugWidth = true
   }
   if (typeof node.opacity === 'number' && node.opacity < 1) style.opacity = Math.round(node.opacity * 100) / 100
   // 匹配主色：文本取文字色，其余取背景填充

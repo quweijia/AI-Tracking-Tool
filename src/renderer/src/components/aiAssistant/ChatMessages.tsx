@@ -36,6 +36,33 @@ function AssistantAvatar() {
   )
 }
 
+/** 思考过程折叠块：流式中默认展开，正文出现后自动折叠（可点击重新展开） */
+function ReasoningBlock({ text, live }: { text: string; live?: boolean }) {
+  const { t } = useTranslation('aiAssistant')
+  const [expanded, setExpanded] = useState(Boolean(live))
+  useEffect(() => {
+    if (!live) setExpanded(false)
+  }, [live])
+  return (
+    <div className={`ai-reasoning${expanded ? ' open' : ''}`}>
+      <button type="button" className="ai-reasoning-head" onClick={() => setExpanded((v) => !v)}>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+        {live ? t('thinking') : t('reasoningTitle')}
+        {live && (
+          <span className="ai-thinking-dots" aria-hidden>
+            <i />
+            <i />
+            <i />
+          </span>
+        )}
+      </button>
+      {expanded && <div className="ai-reasoning-body">{text}</div>}
+    </div>
+  )
+}
+
 /** 消息文本分段：普通文本 或 markdown 表格 */
 type MsgSegment = { type: 'text'; text: string } | { type: 'table'; rows: string[][] }
 
@@ -129,6 +156,7 @@ export default function ChatMessages({ onSuggest, onRetry }: ChatMessagesProps) 
   const loading = useAiAssistantStore((s) => s.loading)
   const streaming = useAiAssistantStore((s) => s.streaming)
   const streamText = useAiAssistantStore((s) => s.streamText)
+  const reasoningText = useAiAssistantStore((s) => s.reasoningText)
   const error = useAiAssistantStore((s) => s.error)
   const projectId = useAiAssistantStore((s) => s.projectId)
   const pageId = useAiAssistantStore((s) => s.pageId)
@@ -140,7 +168,7 @@ export default function ChatMessages({ onSuggest, onRetry }: ChatMessagesProps) 
   useEffect(() => {
     const el = bodyRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages.length, streamText, error, loading])
+  }, [messages.length, streamText, reasoningText, error, loading])
 
   const copyMsg = async (id: string, content: string): Promise<void> => {
     try {
@@ -205,6 +233,7 @@ export default function ChatMessages({ onSuggest, onRetry }: ChatMessagesProps) 
               <div key={m.id} className="ai-msg ai-msg-assistant">
                 <AssistantAvatar />
                 <div className="ai-bubble ai-bubble-assistant">
+                  {m.reasoning && <ReasoningBlock text={m.reasoning} />}
                   <div className="ai-bubble-text">
                     <MessageText content={m.content} />
                   </div>
@@ -232,21 +261,24 @@ export default function ChatMessages({ onSuggest, onRetry }: ChatMessagesProps) 
               <AssistantAvatar />
               <div className="ai-bubble ai-bubble-assistant ai-bubble-streaming">
                 <div className="ai-bubble-text">
+                  {reasoningText && <ReasoningBlock text={reasoningText} live={!streamText} />}
                   {streamText ? (
                     <>
                       <MessageText content={streamText} />
                       <span className="ai-cursor" aria-hidden />
                     </>
                   ) : (
-                    // 尚未收到首个字符：三点跳动提示生成中
-                    <span className="ai-thinking">
-                      {t('thinking')}
-                      <span className="ai-thinking-dots" aria-hidden>
-                        <i />
-                        <i />
-                        <i />
+                    !reasoningText && (
+                      // 尚未收到思考过程或首字符：三点跳动提示生成中
+                      <span className="ai-thinking">
+                        {t('thinking')}
+                        <span className="ai-thinking-dots" aria-hidden>
+                          <i />
+                          <i />
+                          <i />
+                        </span>
                       </span>
-                    </span>
+                    )
                   )}
                 </div>
               </div>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Issue, TargetImage, AnnotationShape } from '../db'
+import PixelLoupe from './PixelLoupe'
 
 export interface NormalizedRect {
   x: number
@@ -39,16 +40,37 @@ interface Props {
   overlay?: boolean
   /** 按住空格平移中：暂停绘制与标注拖拽，整块画布交给画布平移 */
   spacePan?: boolean
+  /** 测量换算用逻辑宽度（图片原始宽 / 该值 = 高清采样倍率），不传按图片原始像素 */
+  logicalWidth?: number
 }
 
 /** 拖拽过程中把坐标限制在 0~1 */
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n))
 
+/** Shift 角度吸附候选角：0/30/45/60/90 及其镜像方向（全圆覆盖） */
+const SNAP_ANGLES = [0, 30, 45, 60, 90, 120, 135, 150, 180, 210, 225, 240, 270, 300, 315, 330]
+
 /** rgb → #RRGGBB */
 const rgbToHex = (r: number, g: number, b: number) =>
   `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`.toUpperCase()
 
+/** 估算 SVG 文本像素宽（右侧贴边翻转判断用）：全角字符≈1em，其余≈0.62em */
+const estTextWidth = (text: string, fontSize: number) =>
+  [...text].reduce((w, ch) => w + (ch.charCodeAt(0) > 0x2e80 ? fontSize : fontSize * 0.62), 0)
+
 const SEVERITIES = ['suggestion', 'minor', 'major'] as const
+
+/** 浅色底（如白色）时点位序号自动切深色字，避免与底色融合；深色底用白字 */
+function inkFor(hex: string): string {
+  const h = hex.replace('#', '')
+  const v = h.length === 3
+    ? h.split('').map((c) => c + c).join('')
+    : h
+  const r = parseInt(v.slice(0, 2), 16) || 0
+  const g = parseInt(v.slice(2, 4), 16) || 0
+  const b = parseInt(v.slice(4, 6), 16) || 0
+  return 0.299 * r + 0.587 * g + 0.114 * b > 186 ? '#334155' : '#fff'
+}
 
 export default function AnnotationCanvas({
   dataUrl,
@@ -65,7 +87,8 @@ export default function AnnotationCanvas({
   flashId,
   focusId,
   overlay,
-  spacePan
+  spacePan,
+  logicalWidth
 }: Props) {
   const { t } = useTranslation('annotationCanvas')
   const svgRef = useRef<SVGSVGElement>(null)
@@ -78,6 +101,36 @@ export default function AnnotationCanvas({
   const [draftMeasure, setDraftMeasure] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   /** 拖拽移动中的标注（渲染时用临时坐标覆盖原位置） */
   const [dragPos, setDragPos] = useState<{ id: string; rect: NormalizedRect } | null>(null)
+
+  /** 画布可视尺寸（测量⊥短线法向量换算用）：渲染期读 getBoundingClientRect 在 tab 隐藏/过渡态会拿到 0， */
+  /** 改由 ResizeObserver 同步——隐藏→显示尺寸从 0 变化时自动触发重渲染，恢复正确短线长度 */
+  const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 })
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect
+      if (!r) return
+      setCanvasSize((prev) => (prev.w === r.width && prev.h === r.height ? prev : { w: r.width, h: r.height }))
+    })
+    ro.observe(svg)
+    return () => ro.disconnect()
+  }, [])
+
+  /** 放大镜：鼠标视口坐标 + 画布视口矩形（null = 不显示） */
+  const [loupe, setLoupe] = useState<{
+    cx: number
+    cy: number
+    rect: { left: number; top: number; width: number; height: number }
+  } | null>(null)
+  const loupeRafRef = useRef(0)
+  const loupePendingRef = useRef<{
+    cx: number
+    cy: number
+    rect: { left: number; top: number; width: number; height: number }
+  } | null>(null)
+  /** 测量/吸色工具且非平移态时启用放大镜 */
+  const loupeActive = (tool === 'measure' || tool === 'picker') && !panMode && !spacePan
 
   // 切换工具/卸载时清理测量半成品
   useEffect(() => {
@@ -116,11 +169,58 @@ export default function AnnotationCanvas({
     }
   }
 
-  /** 归一化矢量 → 实际像素距离（按图片原始尺寸） */
+  /** 归一化矢量 → 实际像素距离（按图片原始尺寸；传 logicalWidth 时换算为逻辑尺寸，抵消高清采样倍率） */
   const measurePx = (dx: number, dy: number): number => {
     const img = imgRef.current
     if (!img || !img.naturalWidth || !img.naturalHeight) return 0
-    return Math.hypot(dx * img.naturalWidth, dy * img.naturalHeight)
+    const scale = logicalWidth ? img.naturalWidth / logicalWidth : 1
+    return Math.hypot(dx * img.naturalWidth, dy * img.naturalHeight) / scale
+  }
+
+  /** Shift 角度吸附：在视觉像素空间把 start→end 矢量吸附到最近候选角（0/30/45/60/90° 及镜像），保持原长度 */
+  const snapMeasure = (start: { x: number; y: number }, end: { x: number; y: number }) => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    const W = rect?.width || 1
+    const H = rect?.height || 1
+    const vx = (end.x - start.x) * W
+    const vy = (end.y - start.y) * H
+    const len = Math.hypot(vx, vy)
+    if (!len) return end
+    const norm = ((((Math.atan2(vy, vx) * 180) / Math.PI) % 360) + 360) % 360
+    let best = 0
+    let bestDiff = 360
+    for (const a of SNAP_ANGLES) {
+      const diff = Math.abs(norm - a)
+      const d = Math.min(diff, 360 - diff)
+      if (d < bestDiff) {
+        bestDiff = d
+        best = a
+      }
+    }
+    const rad = (best * Math.PI) / 180
+    return {
+      x: clamp01(start.x + (Math.cos(rad) * len) / W),
+      y: clamp01(start.y + (Math.sin(rad) * len) / H)
+    }
+  }
+
+  /** 测量端点⊥短线：视觉像素空间求垂直于测量方向的两端短线坐标（工程测量标注样式） */
+  const measureTicks = (x1: number, y1: number, x2: number, y2: number) => {
+    const W = canvasSize.w
+    const H = canvasSize.h
+    // 画布隐藏/过渡期尺寸为 0：|| 1 兜底会把 6px 偏移放大成数倍画布长的超长线，直接不渲染（显示后由 ResizeObserver 触发重渲染恢复）
+    if (!W || !H) return []
+    const len = Math.hypot((x2 - x1) * W, (y2 - y1) * H) || 1
+    // 测量方向的单位法向量（视觉空间）
+    const nx = (-(y2 - y1) * H) / len
+    const ny = ((x2 - x1) * W) / len
+    const tick = (px: number, py: number) => ({
+      x1: px - (nx * 6) / W,
+      y1: py - (ny * 6) / H,
+      x2: px + (nx * 6) / W,
+      y2: py + (ny * 6) / H
+    })
+    return [tick(x1, y1), tick(x2, y2)]
   }
 
   const toNormalized = (clientX: number, clientY: number): { x: number; y: number } => {
@@ -130,6 +230,59 @@ export default function AnnotationCanvas({
       y: clamp01((clientY - rect.top) / rect.height)
     }
   }
+
+  /** 放大镜跟随：rAF 节流，mousemove 只记位置，每帧最多更新一次 */
+  const handleLoupeMove = (e: React.MouseEvent) => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect) return
+    loupePendingRef.current = {
+      cx: e.clientX,
+      cy: e.clientY,
+      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+    }
+    if (loupeRafRef.current) return
+    loupeRafRef.current = requestAnimationFrame(() => {
+      loupeRafRef.current = 0
+      if (loupePendingRef.current) setLoupe(loupePendingRef.current)
+    })
+  }
+
+  /** 移出画布：放大镜隐藏 */
+  const handleLoupeLeave = () => {
+    if (loupeRafRef.current) {
+      cancelAnimationFrame(loupeRafRef.current)
+      loupeRafRef.current = 0
+    }
+    loupePendingRef.current = null
+    setLoupe(null)
+  }
+
+  // 卸载时清理未执行的 rAF
+  useEffect(
+    () => () => {
+      if (loupeRafRef.current) cancelAnimationFrame(loupeRafRef.current)
+    },
+    []
+  )
+
+  // ESC / 右键：隐藏放大镜（右键在画布内时拦截默认菜单）
+  const loupeShown = loupe !== null
+  useEffect(() => {
+    if (!loupeShown) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLoupe(null)
+    }
+    const onCtx = (e: MouseEvent) => {
+      if (svgRef.current && e.target instanceof Node && svgRef.current.contains(e.target)) e.preventDefault()
+      setLoupe(null)
+    }
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('contextmenu', onCtx)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('contextmenu', onCtx)
+    }
+  }, [loupeShown])
 
   const handleMouseDown = (e: React.MouseEvent) => {
     // 点击已有标注（各形状的命中元素会 stopPropagation，不会走到这里）
@@ -143,17 +296,20 @@ export default function AnnotationCanvas({
         setDraftMeasure({ x1: start.x, y1: start.y, x2: start.x, y2: start.y })
         const move = (ev: MouseEvent) => {
           const cur = toNormalized(ev.clientX, ev.clientY)
-          setDraftMeasure({ x1: start.x, y1: start.y, x2: cur.x, y2: cur.y })
+          // 按住 Shift 吸附到 0/30/45/60/90°（含镜像方向）
+          const end = ev.shiftKey ? snapMeasure(start, cur) : cur
+          setDraftMeasure({ x1: start.x, y1: start.y, x2: end.x, y2: end.y })
         }
         const down = (ev: MouseEvent) => {
           window.removeEventListener('mousemove', move)
           window.removeEventListener('mousedown', down, true)
           const cur = toNormalized(ev.clientX, ev.clientY)
-          if (Math.hypot(cur.x - start.x, cur.y - start.y) > 0.005) {
+          const end = ev.shiftKey ? snapMeasure(start, cur) : cur
+          if (Math.hypot(end.x - start.x, end.y - start.y) > 0.005) {
             onQuickCreate?.(
-              { x: start.x, y: start.y, width: cur.x - start.x, height: cur.y - start.y },
+              { x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y },
               targetImage,
-              { measurePx: measurePx(cur.x - start.x, cur.y - start.y) }
+              { measurePx: measurePx(end.x - start.x, end.y - start.y) }
             )
           }
           setDraftMeasure(null)
@@ -307,6 +463,8 @@ export default function AnnotationCanvas({
         ref={svgRef}
         className={`anno-svg ${tool && !spacePan ? 'annotating' : ''} ${panMode || spacePan ? 'pan-mode' : ''}`}
         onMouseDown={panMode || spacePan ? undefined : handleMouseDown}
+        onMouseMove={loupeActive ? handleLoupeMove : undefined}
+        onMouseLeave={loupeActive ? handleLoupeLeave : undefined}
       >
         <defs>
           {SEVERITIES.map((s) => (
@@ -366,6 +524,8 @@ export default function AnnotationCanvas({
           const useCustom = !!issue.color && issue.status !== 'fixed'
           // 拖拽移动中：用临时坐标覆盖原位置
           const R = dragPos && dragPos.id === issue.id ? dragPos.rect : issue
+          // 画布当前显示宽度：右侧贴边翻转判断用（首帧读不到按 0 处理，即不翻转）
+          const canvasW = svgRef.current?.getBoundingClientRect().width ?? 0
 
           if (shape === 'point') {
             return (
@@ -386,6 +546,7 @@ export default function AnnotationCanvas({
                   textAnchor="middle"
                   dominantBaseline="central"
                   pointerEvents="none"
+                  style={useCustom ? { fill: inkFor(issue.color!) } : undefined}
                 >
                   {num}
                 </text>
@@ -437,12 +598,15 @@ export default function AnnotationCanvas({
           }
 
           if (shape === 'text') {
+            // 贴右边缘时文字改向左侧延伸，避免超出画板
+            const flip = R.x * canvasW + estTextWidth(issue.description, 14) + 4 > canvasW
             return (
               <text
                 key={issue.id}
                 className={`anno-text ${sevCls} ${statusCls}${flashCls}${focusCls}`}
                 x={pct(R.x)}
                 y={pct(R.y)}
+                textAnchor={flip ? 'end' : 'start'}
                 onMouseDown={editHandler(issue)}
                 style={useCustom ? { fill: issue.color! } : undefined}
               >
@@ -469,22 +633,18 @@ export default function AnnotationCanvas({
                   pointerEvents="none"
                   style={useCustom ? { stroke: issue.color! } : undefined}
                 />
-                <circle
-                  className={`anno-measure-dot ${statusCls}${flashCls}${focusCls}`}
-                  cx={pct(R.x)}
-                  cy={pct(R.y)}
-                  r={3.5}
-                  pointerEvents="none"
-                  style={useCustom ? { fill: issue.color! } : undefined}
-                />
-                <circle
-                  className={`anno-measure-dot ${statusCls}${flashCls}${focusCls}`}
-                  cx={pct(ex)}
-                  cy={pct(ey)}
-                  r={3.5}
-                  pointerEvents="none"
-                  style={useCustom ? { fill: issue.color! } : undefined}
-                />
+                {measureTicks(R.x, R.y, ex, ey).map((t, i) => (
+                  <line
+                    key={i}
+                    className={`anno-measure-line ${statusCls}${flashCls}${focusCls}`}
+                    x1={pct(t.x1)}
+                    y1={pct(t.y1)}
+                    x2={pct(t.x2)}
+                    y2={pct(t.y2)}
+                    pointerEvents="none"
+                    style={useCustom ? { stroke: issue.color! } : undefined}
+                  />
+                ))}
                 <text
                   className="anno-num"
                   x={pct(R.x)}
@@ -496,7 +656,7 @@ export default function AnnotationCanvas({
                 >
                   {num}
                 </text>
-                {/* 测量值文字标签：同样支持点击打开详情 / 拖拽移动 */}
+                {/* 测量值文字标签：同样支持点击打开详情 / 拖拽移动（文字不跟随自定义色：白色文字会与白描边融合） */}
                 <text
                   className={`anno-measure-label ${statusCls}${flashCls}${focusCls}`}
                   x={pct(mx)}
@@ -506,7 +666,6 @@ export default function AnnotationCanvas({
                   textAnchor={vertical ? 'start' : 'middle'}
                   dominantBaseline="central"
                   pointerEvents="auto"
-                  style={useCustom ? { fill: issue.color! } : undefined}
                   onMouseDown={editHandler(issue)}
                 >
                   {issue.measureValue || `${Math.round(Math.hypot(R.width, R.height) * 1000)}px`}
@@ -528,6 +687,8 @@ export default function AnnotationCanvas({
             const hexValue = targetImage === 'design' ? issue.sampleA : issue.sampleB
             const hexLabel = targetImage === 'design' ? t('pickerLabelDesign', { hex: hexValue }) : t('pickerLabelShot', { hex: hexValue })
             const displayText = hexValue ? hexLabel : (issue.description.length > 40 ? `${issue.description.slice(0, 40)}…` : issue.description)
+            // 贴右边缘时色值翻转到点位左侧，避免超出画板
+            const flip = R.x * canvasW + 11 + estTextWidth(displayText, 12) + 4 > canvasW
             return (
               <g key={issue.id}>
                 {/* 大热区：点击打开编辑弹窗 */}
@@ -554,8 +715,9 @@ export default function AnnotationCanvas({
                   className={`anno-pick-label ${statusCls}${flashCls}${focusCls}`}
                   x={pct(R.x)}
                   y={pct(R.y)}
-                  dx={11}
+                  dx={flip ? -11 : 11}
                   dy={0}
+                  textAnchor={flip ? 'end' : 'start'}
                   dominantBaseline="central"
                   style={{ cursor: 'pointer' }}
                   pointerEvents="auto"
@@ -567,7 +729,7 @@ export default function AnnotationCanvas({
             )
           }
 
-          // rect（默认，兼容旧数据）
+          // rect（默认，兼容旧数据）：仅边框可点击/拖动，框内点击穿透以便其他工具继续标注
           return (
             <g key={issue.id}>
               <rect
@@ -576,8 +738,21 @@ export default function AnnotationCanvas({
                 y={pct(R.y)}
                 width={pct(R.width)}
                 height={pct(R.height)}
-                onMouseDown={editHandler(issue)}
+                pointerEvents="none"
                 style={useCustom ? { stroke: issue.color! } : undefined}
+              />
+              {/* 边框命中区：宽透明 stroke 仅边框响应（pointerEvents="stroke"），框内事件穿透 */}
+              <rect
+                x={pct(R.x)}
+                y={pct(R.y)}
+                width={pct(R.width)}
+                height={pct(R.height)}
+                fill="none"
+                stroke="transparent"
+                strokeWidth={10}
+                pointerEvents="stroke"
+                style={{ cursor: 'pointer' }}
+                onMouseDown={editHandler(issue)}
               />
               <text
                 className={`anno-num ${sevCls}`}
@@ -614,8 +789,21 @@ export default function AnnotationCanvas({
               x2={pct(draftMeasure.x2)}
               y2={pct(draftMeasure.y2)}
             />
-            <circle className="anno-measure-dot" cx={pct(draftMeasure.x1)} cy={pct(draftMeasure.y1)} r={3.5} />
-            <circle className="anno-measure-dot" cx={pct(draftMeasure.x2)} cy={pct(draftMeasure.y2)} r={3.5} />
+            {measureTicks(
+              draftMeasure.x1,
+              draftMeasure.y1,
+              draftMeasure.x2,
+              draftMeasure.y2
+            ).map((t, i) => (
+              <line
+                key={i}
+                className="anno-measure-line anno-draft"
+                x1={pct(t.x1)}
+                y1={pct(t.y1)}
+                x2={pct(t.x2)}
+                y2={pct(t.y2)}
+              />
+            ))}
             <text
               className="anno-measure-label"
               x={pct((draftMeasure.x1 + draftMeasure.x2) / 2)}
@@ -636,6 +824,7 @@ export default function AnnotationCanvas({
           </>
         )}
       </svg>
+      {loupeActive && loupe && <PixelLoupe dataUrl={dataUrl} clientX={loupe.cx} clientY={loupe.cy} rect={loupe.rect} />}
     </div>
   )
 }

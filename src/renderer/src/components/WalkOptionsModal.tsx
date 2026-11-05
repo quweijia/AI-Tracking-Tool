@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { ToleranceConfig, WalkCheckOptions } from '../../../shared/types'
+import type { StructuredChecksConfig, ToleranceConfig, WalkCheckOptions } from '../../../shared/types'
 import { WALK_ANALYSES, WALK_DIMENSIONS } from '../../../shared/types'
 import type { SkillItemLite } from '../utils/skillGuide'
 
@@ -296,11 +296,13 @@ export function WalkAdvancedModal({
   initial,
   debugEnabled,
   layeredEnabled,
+  structuredChecks,
   canRun,
   busy,
   onSave,
   onToggleDebug,
   onChangeLayeredEnabled,
+  onChangeStructuredChecks,
   onRun,
   onCancel
 }: {
@@ -308,12 +310,15 @@ export function WalkAdvancedModal({
   debugEnabled: boolean
   /** 分层还原度判定开关（与 Settings 页共用同一配置键，此处只切 enabled） */
   layeredEnabled: boolean
+  /** 结构化对比增强配置：圆角 computed/父级追溯开关 + Hug 文本宽度判定模式 */
+  structuredChecks: StructuredChecksConfig
   /** 是否具备运行条件（有最近一次走查的采集缓存且当前不忙） */
   canRun: boolean
   busy: boolean
   onSave: (t: ToleranceConfig) => void
   onToggleDebug: (v: boolean) => void
   onChangeLayeredEnabled: (v: boolean) => void
+  onChangeStructuredChecks: (v: StructuredChecksConfig) => void
   onRun: () => void
   onCancel: () => void
 }) {
@@ -384,6 +389,30 @@ export function WalkAdvancedModal({
           />
         </div>
         <p className="settings-desc walk-opt-hint">{t('layeredHint')}</p>
+      </OptSection>
+      <OptSection title={t('structSec')}>
+        <div className="walk-opt-switch-row">
+          <span>{t('structRadiusToggle')}</span>
+          <button
+            type="button"
+            className={`switch ${structuredChecks.radiusCheck ? 'on' : ''}`}
+            title={structuredChecks.radiusCheck ? t('structRadiusOff') : t('structRadiusOn')}
+            onClick={() =>
+              onChangeStructuredChecks({ ...structuredChecks, radiusCheck: !structuredChecks.radiusCheck })
+            }
+          />
+        </div>
+        <p className="settings-desc walk-opt-hint">{t('structRadiusHint')}</p>
+        <OptRadio
+          name="walk-hug"
+          value={structuredChecks.hugWidthMode}
+          onChange={(v) => onChangeStructuredChecks({ ...structuredChecks, hugWidthMode: v })}
+          options={[
+            { value: 'text-content', label: t('hugTextContent') },
+            { value: 'strict', label: t('hugStrict') }
+          ]}
+        />
+        <p className="settings-desc walk-opt-hint">{t('structHugHint')}</p>
       </OptSection>
       <OptSection title={t('tolTitle')}>
         <div className="settings-tol-grid">

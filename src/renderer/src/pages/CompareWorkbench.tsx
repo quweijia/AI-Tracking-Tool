@@ -202,6 +202,8 @@ export default function CompareWorkbench() {
   const [walkControlsOpen, setWalkControlsOpen] = useState(true)
   const [zoom, setZoom] = useState(1)
   const [syncScroll, setSyncScroll] = useState(true)
+  /** 取色是否同步双图：开启时一次点击在设计稿与开发截图同一坐标各生成一条吸色标注 */
+  const [pickerSync, setPickerSync] = useState(true)
   const [sliderPos, setSliderPos] = useState(50)
   /** 滑块模式：是否显示分界线（隐藏后画布分界线与调整滑杆都收起） */
   const [showDivider, setShowDivider] = useState(true)
@@ -379,9 +381,11 @@ export default function CompareWorkbench() {
       return !!el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
     }
     const down = (e: KeyboardEvent) => {
-      if (e.code !== 'Space' || e.repeat) return
+      if (e.code !== 'Space') return
       if (isTypingTarget(e.target)) return
+      // 按住不放时浏览器会持续派发 repeat keydown 并触发页面滚动默认行为，必须一并阻止
       e.preventDefault()
+      if (e.repeat) return
       setSpaceHeld(true)
     }
     const up = (e: KeyboardEvent) => {
@@ -501,9 +505,10 @@ export default function CompareWorkbench() {
     setRedoStack([])
   }, [pageId])
 
-  // 快捷键：Mac Cmd+Z 撤销 / Cmd+Shift+Z 重做（Windows Ctrl 同理；输入框内交给原生撤销）
+  // 快捷键：Mac Cmd+Z 撤销 / Cmd+Shift+Z 重做（Windows Ctrl 同理；输入框内交给原生撤销；自动走查模式由 AutoWalkPanel 自己处理）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (workMode !== 'manual') return
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z') return
       const el = e.target as HTMLElement | null
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
@@ -622,9 +627,9 @@ export default function CompareWorkbench() {
         createdAt: Date.now()
       }
     } else {
-      // 吸色：一次点击同时取设计稿与开发截图同一坐标的颜色，双图各生成一条吸色标注
+      // 吸色：默认同步取设计稿与开发截图同一坐标的颜色（双图各生成一条）；工具栏可关闭同步，只取当前点击的一侧
       const ownHex = data.colorHex ?? sampleColorAt(target === 'design' ? designUrl : shotUrl, rect.x, rect.y)
-      const otherHex = sampleColorAt(target === 'design' ? shotUrl : designUrl, rect.x, rect.y)
+      const otherHex = pickerSync ? sampleColorAt(target === 'design' ? shotUrl : designUrl, rect.x, rect.y) : ''
       const now = Date.now()
       const rows: Issue[] = []
       if (ownHex) {
@@ -1310,6 +1315,17 @@ export default function CompareWorkbench() {
                 {t.label}
               </button>
             ))}
+            {/* 取色同步开关：仅吸色工具激活时出现，激活态=双图同步取色 */}
+            {tool === 'picker' && (
+              <button
+                type="button"
+                className={`anno-tool${pickerSync ? ' active' : ''}`}
+                title={t('pickerSyncHint')}
+                onClick={() => setPickerSync((v) => !v)}
+              >
+                {t('pickerSync')}
+              </button>
+            )}
           </div>
           <p className="anno-toolbar-hint">
             {TOOLS.find((t) => t.value === tool)?.hint}

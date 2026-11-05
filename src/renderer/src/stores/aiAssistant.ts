@@ -22,6 +22,8 @@ interface AiAssistantState {
   streamingReqId: string
   /** 流式中的回复文本（未落库，随 delta 增长） */
   streamText: string
+  /** 流式中的思考过程文本（未落库，随 delta 增长，DeepSeek 风格 reasoning） */
+  reasoningText: string
   /** 本轮请求的错误文案（面板内气泡展示，不落库） */
   error: string
   toggle: () => void
@@ -29,11 +31,18 @@ interface AiAssistantState {
   /** 切换会话：从 IndexedDB 加载该项目/页面的历史对话（同会话重复调用不重载） */
   loadSession: (projectId: string, pageId: string) => Promise<void>
   /** 新增消息（落库 + 状态追加），返回完整消息对象供流式请求引用 */
-  addMessage: (role: AssistantMessage['role'], content: string, refs?: AssistantRef[]) => Promise<AssistantMessage>
+  addMessage: (
+    role: AssistantMessage['role'],
+    content: string,
+    refs?: AssistantRef[],
+    reasoning?: string
+  ) => Promise<AssistantMessage>
   setStreaming: (streaming: boolean) => void
   setStreamingReqId: (reqId: string) => void
-  /** 流式 delta 追加 */
+  /** 流式 delta 追加（正文与思考过程） */
   appendStreamText: (delta: string) => void
+  /** 思考过程 delta 追加（reasoning，不计入正文） */
+  appendReasoning: (delta: string) => void
   /** 流式结束/失败后清空流式状态 */
   resetStream: () => void
   setError: (error: string) => void
@@ -50,12 +59,13 @@ export const useAiAssistantStore = create<AiAssistantState>((set, get) => ({
   streaming: false,
   streamingReqId: '',
   streamText: '',
+  reasoningText: '',
   error: '',
   toggle: () => set((s) => ({ open: !s.open })),
   setOpen: (open) => set({ open }),
   loadSession: async (projectId, pageId) => {
     if (projectId === get().projectId && pageId === get().pageId) return
-    set({ projectId, pageId, loading: true, messages: [], streamText: '', error: '', streaming: false })
+    set({ projectId, pageId, loading: true, messages: [], streamText: '', reasoningText: '', error: '', streaming: false })
     try {
       const rows = await db.assistantMessages.where('[projectId+pageId]').equals([projectId, pageId]).sortBy('createdAt')
       set({ messages: rows, loading: false })
@@ -63,7 +73,7 @@ export const useAiAssistantStore = create<AiAssistantState>((set, get) => ({
       set({ loading: false })
     }
   },
-  addMessage: async (role, content, refs) => {
+  addMessage: async (role, content, refs, reasoning) => {
     const msg: AssistantMessage = {
       id: genId(),
       projectId: get().projectId,
@@ -71,6 +81,7 @@ export const useAiAssistantStore = create<AiAssistantState>((set, get) => ({
       role,
       content,
       ...(refs ? { refs } : {}),
+      ...(reasoning ? { reasoning } : {}),
       createdAt: Date.now()
     }
     await db.assistantMessages.add(msg)
@@ -80,7 +91,8 @@ export const useAiAssistantStore = create<AiAssistantState>((set, get) => ({
   setStreaming: (streaming) => set({ streaming, ...(streaming ? {} : { streamingReqId: '' }) }),
   setStreamingReqId: (streamingReqId) => set({ streamingReqId }),
   appendStreamText: (delta) => set((s) => ({ streamText: s.streamText + delta })),
-  resetStream: () => set({ streamText: '', streaming: false }),
+  appendReasoning: (delta) => set((s) => ({ reasoningText: s.reasoningText + delta })),
+  resetStream: () => set({ streamText: '', reasoningText: '', streaming: false }),
   setError: (error) => set({ error }),
   clearSession: async () => {
     const { projectId, pageId } = get()
@@ -89,6 +101,6 @@ export const useAiAssistantStore = create<AiAssistantState>((set, get) => ({
     } catch {
       // 删除失败不阻塞 UI，消息列表仍本地清空
     }
-    set({ messages: [], streamText: '', error: '' })
+    set({ messages: [], streamText: '', reasoningText: '', error: '' })
   }
 }))

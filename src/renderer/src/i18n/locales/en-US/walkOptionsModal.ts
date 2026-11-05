@@ -50,6 +50,15 @@ export default {
   layeredOff: 'Turn off layered restoration scoring',
   layeredHint:
     'When enabled, structured comparison results classify deviations at module / element level as "absorbed" or "reported" and compute an overall restoration score. Only the summary appears in the status message; no extra issues are generated.',
+  // Structured comparison enhancements (radius computed/parent trace toggle + hug width mode)
+  structSec: 'Structured comparison enhancements',
+  structRadiusToggle: 'Radius computed value & parent tracing',
+  structRadiusOn: 'Turn on radius computed value & parent corner tracing',
+  structRadiusOff: 'Turn off to compare radius against stylesheet literal values only',
+  structRadiusHint: 'By default, radius reads the browser computed value and traces up to parent clipping containers (parent radius + overflow hidden, etc.) to avoid false positives from children visually inheriting rounded corners; when off, falls back to literal value comparison.',
+  hugTextContent: 'Judge by text content (recommended)',
+  hugStrict: 'Strictly follow design width',
+  structHugHint: '"By text content" validates hug-width text against its actual text width, ignoring line-box differences from the design; "Strict" keeps the original direct comparison with the design value.',
   tolTitle: 'Comparison tolerance',
   tolHint: 'Tolerance only applies to the structured size comparison in advanced debug: differences below tolerance generate no issues. One global rule set; applies immediately after saving.',
   tol_size: 'Size / Position',

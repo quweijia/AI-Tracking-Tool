@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { LayeredRunSummary, LayeredToleranceConfig, StyleDiff, StyleNode, ToleranceConfig, WalkCheckOptions } from '../../../shared/types'
+import type { LayeredRunSummary, LayeredToleranceConfig, StructuredChecksConfig, StyleDiff, StyleNode, ToleranceConfig, WalkCheckOptions } from '../../../shared/types'
 import {
+  DEFAULT_STRUCTURED_CHECKS,
   DEFAULT_TOLERANCE,
   DEFAULT_WALK_CHECK_OPTIONS,
   LAYERED_TOLERANCE_KEY,
+  STRUCTURED_CHECKS_KEY,
   WALK_ANALYSES,
   WALK_DIMENSIONS,
   normalizeLayeredTolerance,
+  normalizeStructuredChecks,
   normalizeWalkCheckOptions
 } from '../../../shared/types'
 import {
@@ -25,6 +28,7 @@ import AnnotationCanvas from './AnnotationCanvas'
 import DevBrowser, { type DevBrowserHandle } from './DevBrowser'
 import IssueEditorModal from './IssueEditorModal'
 import MatchConfirmDrawer, { type PendingPair } from './MatchConfirmDrawer'
+import ExemptResultDrawer from './ExemptResultDrawer'
 import LayeredResultDrawer from './LayeredResultDrawer'
 import { WalkCheckOptionsModal, WalkAdvancedModal } from './WalkOptionsModal'
 import { buildSkillGuides, type SkillItemLite } from '../utils/skillGuide'
@@ -64,8 +68,11 @@ const CONFIRM_THRESHOLD = 0.6
 /** 走查视口高度（页面高度设置项已移除，采集时整页自动适配，预览用固定基准高度） */
 const WALK_VP_HEIGHT = 900
 
-/** 走查结果标注工具：browse 仅浏览（抓手平移），其余可直接在结果图上绘制 */
-type WalkTool = 'browse' | 'point' | 'rect' | 'text'
+/** 走查结果标注工具：browse 仅浏览（抓手平移），其余可直接在结果图上绘制（measure/picker 为直建工具，不弹编辑弹窗） */
+type WalkTool = 'browse' | 'point' | 'rect' | 'text' | 'measure' | 'picker'
+
+/** 自动走查标注历史操作（可逆）：add=新增（直建/弹窗），update=拖拽移动；删除走编辑弹窗，不纳入撤销 */
+type WalkHistoryOp = { type: 'add'; issue: Issue } | { type: 'update'; before: Issue; after: Issue }
 
 /** 结果层筛选：全部 / AI 视觉 / Token 规范 / 元素清单 / 无障碍 / 结构化调试 / 手动新增 */
 type LayerFilter = 'all' | 'structured' | 'spec' | 'visual' | 'manual' | 'element' | 'a11y'
@@ -209,6 +216,24 @@ function WalkToolIcon({ name }: { name: WalkTool }) {
           <path d="M9 20h6" />
         </svg>
       )
+    case 'measure':
+      // 两点测量：斜线 + 两端点，与画布上测量标注的渲染形态一致
+      return (
+        <svg {...common}>
+          <path d="M6.5 17.5L17.5 6.5" />
+          <circle cx="5" cy="19" r="2" />
+          <circle cx="19" cy="5" r="2" />
+        </svg>
+      )
+    case 'picker':
+      // 吸管取色
+      return (
+        <svg {...common}>
+          <path d="m2 22 1-1h3l9-9" />
+          <path d="M3 21v-3l9-9" />
+          <path d="m15 6 3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4a2.1 2.1 0 1 1-3 3l-3.8-3.8a2.1 2.1 0 1 1 3-3l.4.4Z" />
+        </svg>
+      )
   }
 }
 
@@ -293,6 +318,11 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
   /** 最近一次走查的分层旁路摘要（随消息条存活，不落库）；layeredOpen 控制明细抽屉显隐（关闭后可从消息条再次打开） */
   const [layeredResult, setLayeredResult] = useState<LayeredRunSummary | null>(null)
   const [layeredOpen, setLayeredOpen] = useState(false)
+  /** 结构化对比增强配置（圆角 computed/父级追溯开关 + Hug 文本宽度判定模式，config 持久化） */
+  const [structuredChecks, setStructuredChecks] = useState<StructuredChecksConfig>(DEFAULT_STRUCTURED_CHECKS)
+  /** 最近一次结构化分析的圆角父级裁剪豁免项（随消息条存活，只读抽屉展示，不落库不进报告） */
+  const [exemptDiffs, setExemptDiffs] = useState<StyleDiff[] | null>(null)
+  const [exemptOpen, setExemptOpen] = useState(false)
   /** 自动走查独立双图（tab 内展示，与手动上传隔离） */
   const [walkDesignUrl, setWalkDesignUrl] = useState('')
   const [walkShotUrl, setWalkShotUrl] = useState('')
@@ -323,6 +353,9 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
   /** 结果面板手动标注工具（两画布共用）与共享缩放（设计稿/开发截图同步缩放） */
   const [walkTool, setWalkTool] = useState<WalkTool>('browse')
   const [walkZoom, setWalkZoom] = useState(1)
+  /** 自动走查撤销/重做历史栈（新增/移动共用，无按钮入口，Cmd/Ctrl+Z 直连；切页清空） */
+  const [walkUndoStack, setWalkUndoStack] = useState<WalkHistoryOp[]>([])
+  const [walkRedoStack, setWalkRedoStack] = useState<WalkHistoryOp[]>([])
   /** 新建走查标注草稿（结果图上绘制后弹出编辑弹窗） */
   const [creatingWalk, setCreatingWalk] = useState<{
     rect: { x: number; y: number; width: number; height: number }
@@ -454,6 +487,9 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
       setAdvancedDebug(c.walkAdvancedDebug === true)
       setLayeredEnabled(
         normalizeLayeredTolerance(c.walkLayeredTolerance as Partial<LayeredToleranceConfig> | undefined).enabled
+      )
+      setStructuredChecks(
+        normalizeStructuredChecks(c.walkStructuredChecks as Partial<StructuredChecksConfig> | undefined)
       )
       // 加载技能列表 + 恢复上次选用的技能集（无记录回退全局默认绑定），过滤已删除的技能
       const skillList = (c.skills as SkillItemLite[] | undefined) ?? []
@@ -628,6 +664,9 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
         setMsg({ ok: false, text: t('errNoPat') })
         return
       }
+      // 重新走查：立即清空双图画板旧图（设计稿/开发截图），新采集落库后由 effect 回填新图
+      setWalkDesignUrl('')
+      setWalkShotUrl('')
       // 1. 轻量读取画板宽度（视口宽度自动匹配）
       const size = await window.electronAPI.figmaNodeSize({ pat, figmaUrl: figUrl })
       if (!size.ok || !size.width) {
@@ -963,6 +1002,9 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
     // 重跑时清空上一次分层旁路摘要与抽屉，避免残留
     setLayeredResult(null)
     setLayeredOpen(false)
+    // 同步清空上一次圆角豁免项与抽屉
+    setExemptDiffs(null)
+    setExemptOpen(false)
     try {
       const cfg = await window.electronAPI.getConfig()
       // 检查深度映射：容差倍率（宽松 ×2 / 标准 ×1 / 严格 ÷2）；宽高与内边距/间距仅严格模式比对
@@ -986,6 +1028,9 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
       // 分层旁路结果：仅摘要展示与明细抽屉（不落库、不进问题清单、不进报告）
       const layered = cmp.layered?.enabled ? cmp.layered : null
       if (layered) setLayeredResult(layered)
+      // 圆角父级裁剪豁免项：仅摘要展示与只读抽屉（不落库、不进问题清单、不进报告）
+      const exempt = cmp.exemptDiffs?.length ? cmp.exemptDiffs : null
+      if (exempt) setExemptDiffs(exempt)
       // 拆分：高置信度自动落库；低置信度进人工确认
       const autoDiffs = cmp.diffs.filter((d) => d.matchConfidence >= CONFIRM_THRESHOLD)
       const pending: PendingPair[] = cmp.pairs
@@ -1019,7 +1064,8 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
               moduleAbsorbed: layered.moduleAbsorbed,
               elementReported: layered.elementReported
             })
-          : ''
+          : '',
+        exempt ? t('exemptSummary', { count: exempt.length }) : ''
       ].filter(Boolean)
       setMsg({ ok: true, text: parts.join(t('sep')) })
       if (pending.length) setPendingPairs(pending)
@@ -1089,6 +1135,68 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
     void window.electronAPI.setConfig(LAYERED_TOLERANCE_KEY, { ...cur, enabled: v })
   }
 
+  /** 修改结构化对比增强配置（独立配置键，整对象直写即可） */
+  const changeStructuredChecks = (v: StructuredChecksConfig) => {
+    setStructuredChecks(v)
+    void window.electronAPI.setConfig(STRUCTURED_CHECKS_KEY, v)
+  }
+
+  /** 记录一步可撤销操作（新操作入栈时清空重做栈，最多保留 50 步） */
+  const pushWalkHistory = (op: WalkHistoryOp) => {
+    setWalkUndoStack((s) => [...s.slice(-49), op])
+    setWalkRedoStack([])
+  }
+
+  /** 执行撤销/重做：按操作类型对库做反向/正向写入并刷新页面时间戳 */
+  const applyWalkHistoryOp = async (op: WalkHistoryOp, dir: 'undo' | 'redo') => {
+    if (op.type === 'add') {
+      if (dir === 'undo') await db.issues.bulkDelete([op.issue.id])
+      else await db.issues.bulkPut([op.issue])
+      void touchPage(op.issue.pageId)
+    } else {
+      await db.issues.bulkPut([dir === 'undo' ? op.before : op.after])
+      void touchPage(op.before.pageId)
+    }
+  }
+
+  /** 撤销上一步自动走查标注操作（Cmd/Ctrl+Z） */
+  const undoWalk = () => {
+    const op = walkUndoStack[walkUndoStack.length - 1]
+    if (!op) return
+    void applyWalkHistoryOp(op, 'undo')
+    setWalkUndoStack((s) => s.slice(0, -1))
+    setWalkRedoStack((r) => [...r, op])
+  }
+
+  /** 重做被撤销的操作（Cmd/Ctrl+Shift+Z） */
+  const redoWalk = () => {
+    const op = walkRedoStack[walkRedoStack.length - 1]
+    if (!op) return
+    void applyWalkHistoryOp(op, 'redo')
+    setWalkRedoStack((r) => r.slice(0, -1))
+    setWalkUndoStack((s) => [...s.slice(-49), op])
+  }
+
+  // 切换页面时清空撤销/重做栈（操作与页面绑定，跨页撤销无意义）
+  useEffect(() => {
+    setWalkUndoStack([])
+    setWalkRedoStack([])
+  }, [page.id])
+
+  // 快捷键：Cmd/Ctrl+Z 撤销、Cmd/Ctrl+Shift+Z 重做（输入框内交给原生撤销；不设依赖数组，每次渲染重挂保证闭包新鲜）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z') return
+      e.preventDefault()
+      if (e.shiftKey) redoWalk()
+      else undoWalk()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+
   /** 走查结果编辑保存（与手动标注一致的编辑弹窗） */
   const saveWalkIssue = async (fields: {
     description: string
@@ -1126,7 +1234,7 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
     measureValue?: string
   }) => {
     if (!creatingWalk) return
-    await db.issues.add({
+    const issue: Issue = {
       id: genId(),
       pageId: page.id,
       targetImage: creatingWalk.targetImage,
@@ -1142,9 +1250,59 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
       source: 'manual',
       imgSet: 'walk',
       createdAt: Date.now()
-    })
+    }
+    await db.issues.add(issue)
+    pushWalkHistory({ type: 'add', issue })
     void touchPage(page.id)
     setCreatingWalk(null)
+  }
+
+  /** 测量/吸色直建（不弹编辑弹窗）：按数据形态落库为 measure（含换算 px）或 picker（含取样色）标注 */
+  const quickWalkCreate = (
+    rect: { x: number; y: number; width: number; height: number },
+    targetImage: 'design' | 'screenshot',
+    data: { measurePx?: number; colorHex?: string }
+  ): void => {
+    const base = {
+      id: genId(),
+      pageId: page.id,
+      targetImage,
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+      status: 'pending' as const,
+      source: 'manual' as const,
+      imgSet: 'walk' as const,
+      createdAt: Date.now()
+    }
+    if (data.measurePx != null) {
+      const px = `${Math.max(1, Math.round(data.measurePx))}px`
+      const issue: Issue = {
+        ...base,
+        shape: 'measure',
+        measureValue: px,
+        description: t('quickMeasureDesc', { px }),
+        severity: 'suggestion',
+        category: 'spacing'
+      }
+      void db.issues.add(issue)
+      pushWalkHistory({ type: 'add', issue })
+    } else if (data.colorHex) {
+      const issue: Issue = {
+        ...base,
+        shape: 'picker',
+        color: data.colorHex,
+        description: t('quickPickerDesc', { hex: data.colorHex }),
+        severity: 'suggestion',
+        category: 'color'
+      }
+      void db.issues.add(issue)
+      pushWalkHistory({ type: 'add', issue })
+    } else {
+      return
+    }
+    void touchPage(page.id)
   }
 
   const hasWalkImages = !!(walkDesignUrl && walkShotUrl)
@@ -1179,7 +1337,9 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
     { value: 'browse', title: t('tool_browse') },
     { value: 'point', title: t('tool_point') },
     { value: 'rect', title: t('tool_rect') },
-    { value: 'text', title: t('tool_text') }
+    { value: 'text', title: t('tool_text') },
+    { value: 'measure', title: t('tool_measure') },
+    { value: 'picker', title: t('tool_picker') }
   ]
 
   /** 面板工具条：标注工具切换 + 缩放（设计稿/开发截图共用工具与同步缩放） */
@@ -1265,6 +1425,12 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
                 {t('layeredDetail')}
               </button>
             )}
+            {/* 圆角父级裁剪豁免项：有结果且消息条存活时可查看明细（只读抽屉，不落库不进报告） */}
+            {exemptDiffs && msg && (
+              <button type="button" className="auto-walk-cancel" onClick={() => setExemptOpen(true)}>
+                {t('exemptDetail')}
+              </button>
+            )}
             {/* 完成类通知条支持手动关闭（AI 视觉走查完成 / 结构化分析完成等） */}
             {msg && (
               <button
@@ -1287,11 +1453,6 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
           {(walkIssues.length > 0 && (visualCount > 0 || specCount > 0 || elementCount > 0 || a11yCount > 0 || manualCount > 0 || walkCategories.length > 0)) && (
             <div className="aw-filters">
               <div className="aw-chip-group">
-                {/* 技能效果统计入口（模块3）：横幅最左侧，点击弹出统计弹窗 */}
-                <button type="button" className="aw-chip" title={t('statsTitle')} onClick={() => setStatsOpen(true)}>
-                  {t('statsTitle')}
-                </button>
-                <span className="aw-filter-sep" />
                 {([
                   { key: 'all', label: t('filterAll', { n: walkIssues.length }) },
                   ...(visualCount ? [{ key: 'visual', label: t('filterVisual', { n: visualCount }) }] : []),
@@ -1337,9 +1498,13 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
                   ))}
                 </div>
               )}
-              {walkCategories.length > 0 && <span className="aw-filter-sep" />}
-              {walkCategories.length > 0 && (
-                <div className="aw-chip-group">
+              <span className="aw-filter-sep" />
+              {/* 分类组（末位右对齐）：技能效果统计入口紧邻「全部类型」左侧，点击弹出统计弹窗 */}
+              <div className="aw-chip-group">
+                <button type="button" className="aw-chip" title={t('statsTitle')} onClick={() => setStatsOpen(true)}>
+                  {t('statsTitle')}
+                </button>
+                {walkCategories.length > 0 && (
                   <button
                     type="button"
                     className={`aw-chip${catFilter === 'all' ? ' active' : ''}`}
@@ -1347,6 +1512,7 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
                   >
                     {t('catAll')}
                   </button>
+                )}
                   {walkCategories.map((c) => (
                     <button
                       key={c}
@@ -1358,8 +1524,7 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
                       {catLabel(c)}
                     </button>
                   ))}
-                </div>
-              )}
+              </div>
             </div>
           )}
           {/* 聚焦查看提示条：双图只显示当前问题点位，可退出；描述剥离命中技能标注，命中技能以小标签展示（模块3） */}
@@ -1403,14 +1568,18 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
                       issues={walkDesignIssues}
                       tool={walkTool === 'browse' ? null : walkTool}
                       panMode={walkTool === 'browse'}
+                      logicalWidth={lastRunRef.current?.frameSize?.width ?? (figmaWidth && figmaWidth > 0 ? figmaWidth : undefined)}
                       targetImage="design"
                       noOf={(issue) => issueNos.get(issue.id) ?? 0}
                       focusId={focusIssue?.id ?? null}
                       onCreate={(rect, target) =>
                         setCreatingWalk({ rect, targetImage: target, shape: walkTool as AnnotationShape })
                       }
+                      onQuickCreate={quickWalkCreate}
                       onMove={(issue, rect) => {
+                        const after = { ...issue, x: rect.x, y: rect.y, width: rect.width, height: rect.height }
                         void db.issues.update(issue.id, { x: rect.x, y: rect.y, width: rect.width, height: rect.height })
+                        pushWalkHistory({ type: 'update', before: issue, after })
                         void touchPage(issue.pageId)
                       }}
                       onEdit={(issue) => setEditingIssue(issue)}
@@ -1439,14 +1608,18 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
                       issues={walkShotIssues}
                       tool={walkTool === 'browse' ? null : walkTool}
                       panMode={walkTool === 'browse'}
+                      logicalWidth={lastRunRef.current?.viewport?.width ?? (figmaWidth && figmaWidth > 0 ? figmaWidth : undefined)}
                       targetImage="screenshot"
                       noOf={(issue) => issueNos.get(issue.id) ?? 0}
                       focusId={focusIssue?.id ?? null}
                       onCreate={(rect, target) =>
                         setCreatingWalk({ rect, targetImage: target, shape: walkTool as AnnotationShape })
                       }
+                      onQuickCreate={quickWalkCreate}
                       onMove={(issue, rect) => {
+                        const after = { ...issue, x: rect.x, y: rect.y, width: rect.width, height: rect.height }
                         void db.issues.update(issue.id, { x: rect.x, y: rect.y, width: rect.width, height: rect.height })
+                        pushWalkHistory({ type: 'update', before: issue, after })
                         void touchPage(issue.pageId)
                       }}
                       onEdit={(issue) => setEditingIssue(issue)}
@@ -1516,6 +1689,10 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
         <LayeredResultDrawer summary={layeredResult} onClose={() => setLayeredOpen(false)} />
       )}
 
+      {exemptOpen && exemptDiffs && (
+        <ExemptResultDrawer items={exemptDiffs} onClose={() => setExemptOpen(false)} />
+      )}
+
       {statsOpen && (
         <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && setStatsOpen(false)}>
           <div className="modal">
@@ -1552,11 +1729,13 @@ export default function AutoWalkPanel({ page, issues, onWalkDone, focusIssue, on
           initial={tolerance}
           debugEnabled={advancedDebug}
           layeredEnabled={layeredEnabled}
+          structuredChecks={structuredChecks}
           canRun={!!(lastRunRef.current?.designRoot && lastRunRef.current?.domRoot) && !busy}
           busy={running}
           onSave={saveTolerance}
           onToggleDebug={toggleAdvancedDebug}
           onChangeLayeredEnabled={(v) => void toggleLayered(v)}
+          onChangeStructuredChecks={changeStructuredChecks}
           onRun={() => {
             setTolOpen(false)
             void runStructured({ force: true })

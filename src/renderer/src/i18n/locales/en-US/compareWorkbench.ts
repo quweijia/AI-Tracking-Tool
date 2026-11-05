@@ -56,6 +56,8 @@ export default {
   focusingOn: 'Focusing on: {{desc}}',
   exitFocus: 'Exit focus',
   syncScroll: 'Sync scroll',
+  pickerSync: 'Sync pick',
+  pickerSyncHint: 'When on, one click samples both design and dev screenshot at the same coordinates; off picks only the clicked side',
   divider: 'Divider',
   showDividerLabel: 'Show divider',
   zoom: 'Zoom',

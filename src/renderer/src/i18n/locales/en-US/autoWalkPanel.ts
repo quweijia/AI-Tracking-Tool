@@ -5,6 +5,10 @@ export default {
   tool_point: 'Point: click on the result image to place a marker',
   tool_rect: 'Rect: drag to box-select an issue area',
   tool_text: 'Text: click on the result image to add a text annotation',
+  tool_measure: 'Measure: drag between two points to measure size (creates instantly)',
+  tool_picker: 'Color picker: click to sample a color and annotate it (creates instantly)',
+  quickMeasureDesc: 'Measure {{px}}',
+  quickPickerDesc: 'Color sample {{hex}}',
   zoom_out: 'Zoom out',
   zoom_in: 'Zoom in',
   // Skill selection (auto walkthrough × SkillHub)
@@ -103,6 +107,8 @@ export default {
   unmatched: '{{d}} unmatched design layers / {{e}} unmatched page elements',
   layeredSummary: 'Layered fidelity {{score}} ｜ {{moduleAbsorbed}} absorbed · {{elementReported}} reported',
   layeredDetail: 'View details',
+  exemptSummary: '{{count}} exempted radius diffs (parent clip)',
+  exemptDetail: 'View exempted items',
   sep: '; ',
   selfUrlErr: "Cannot load the app's own URL (the built-in browser would nest this app and freeze). Enter the real URL of the dev page.",
   // Programmatic checks (token compliance / element checklist / accessibility)

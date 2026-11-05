@@ -56,6 +56,8 @@ export default {
   focusingOn: '正在聚焦查看：{{desc}}',
   exitFocus: '退出聚焦',
   syncScroll: '同步滚动',
+  pickerSync: '同步取样',
+  pickerSyncHint: '开启后一次点击在设计稿与开发截图同一坐标各生成一条取色标注；关闭则只在当前点击的一侧取色',
   divider: '分割线',
   showDividerLabel: '显示分界线',
   zoom: '缩放',

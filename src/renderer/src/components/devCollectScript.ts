@@ -40,12 +40,27 @@ export const getDomCollectScript = (): string => String.raw`
     return isFinite(n) ? n : undefined;
   };
 
-  const radiusOf = (cs) => {
-    const corners = [cs.borderTopLeftRadius, cs.borderTopRightRadius, cs.borderBottomRightRadius, cs.borderBottomLeftRadius]
-      .map(v => parseFloat(v));
+  const CORNER_PROPS = ['borderTopLeftRadius', 'borderTopRightRadius', 'borderBottomRightRadius', 'borderBottomLeftRadius'];
+
+  // 单角解析：'12px' / '50%' / '12px 8px'（椭圆角取第一段水平分量）；百分比按元素短边换算 px
+  const cornerPx = (raw, minSide) => {
+    if (!raw) return NaN;
+    const first = String(raw).trim().split(/\s+/)[0];
+    if (first.endsWith('%')) {
+      const pct = parseFloat(first);
+      return isNaN(pct) ? NaN : Math.round((pct / 100) * minSide * 100) / 100;
+    }
+    const v = parseFloat(first);
+    return isNaN(v) ? NaN : Math.round(v * 100) / 100;
+  };
+
+  const radiusOf = (cs, rect) => {
+    const minSide = Math.min(rect.width, rect.height);
+    const corners = CORNER_PROPS.map(p => cornerPx(cs[p], minSide));
     if (corners.some(v => isNaN(v))) return undefined;
     if (corners.every(v => v === 0)) return undefined;
-    return corners.map(v => Math.round(v * 100) / 100);
+    const percent = CORNER_PROPS.some(p => String(cs[p] ?? '').trim().split(/\s+/)[0].endsWith('%'));
+    return { radius: corners, percent };
   };
 
   const domPath = (el) => {
@@ -79,6 +94,28 @@ export const getDomCollectScript = (): string => String.raw`
     return text.slice(0, 200);
   };
 
+  // Range 实测直接文本子节点的渲染宽度（多行取最宽行），hug 文本宽度比对用
+  const textContentWidthOf = (el) => {
+    const texts = [];
+    for (const n of el.childNodes) {
+      if (n.nodeType === 3 && (n.textContent || '').trim()) texts.push(n);
+    }
+    if (!texts.length) return undefined;
+    let w = 0;
+    for (const t of texts) {
+      let r = null;
+      try { r = document.createRange(); r.selectNodeContents(t); } catch (e) { continue; }
+      let rects = null;
+      try { rects = r.getClientRects(); } catch (e) { rects = null; }
+      if (!rects) continue;
+      for (let i = 0; i < rects.length; i++) {
+        const rc = rects[i];
+        if (rc && rc.width > 1) w = Math.max(w, rc.width);
+      }
+    }
+    return w > 0 ? Math.round(w * 100) / 100 : undefined;
+  };
+
   // 有效背景色：自身背景透明时向上取最近祖先的可见背景（a11y 对比度检查用）
   const effectiveBgOf = (el) => {
     let cur = el;
@@ -92,6 +129,51 @@ export const getDomCollectScript = (): string => String.raw`
       depth++;
     }
     return null;
+  };
+
+  // 父容器裁剪追溯：自身无圆角时，向上找 borderRadius>0 且 overflow 水平/垂直裁剪的祖先，
+  // 元素包围盒完全落在祖先内且角点落入对应角裁剪方块 → 继承该角圆角（不提前终止，第一个产出非空继承角的祖先胜出）
+  const parentClipRadius = (el, rect) => {
+    let cur = el.parentElement;
+    let depth = 0;
+    while (cur && cur.nodeType === 1 && depth < 8) {
+      depth++;
+      let pcs = null;
+      try { pcs = getComputedStyle(cur); } catch (e) { pcs = null; }
+      if (pcs) {
+        const clips = (v) => v === 'hidden' || v === 'clip';
+        const prect = cur.getBoundingClientRect();
+        const pr = radiusOf(pcs, prect);
+        if (pr && pr.radius.some(v => v > 0) && (clips(pcs.overflowX) || clips(pcs.overflowY))) {
+          const fullyInside =
+            rect.left >= prect.left - 1 && rect.right <= prect.right + 1 &&
+            rect.top >= prect.top - 1 && rect.bottom <= prect.bottom + 1;
+          if (fullyInside) {
+            const pts = [[rect.left, rect.top], [rect.right, rect.top], [rect.right, rect.bottom], [rect.left, rect.bottom]];
+            const anchors = [
+              [prect.left, prect.top, 1, 1], [prect.right, prect.top, -1, 1],
+              [prect.right, prect.bottom, -1, -1], [prect.left, prect.bottom, 1, -1]
+            ];
+            const inherited = [0, 0, 0, 0];
+            let hit = false;
+            for (let i = 0; i < 4; i++) {
+              const r = pr.radius[i];
+              if (r <= 0) continue;
+              const ax = anchors[i][0], ay = anchors[i][1], sx = anchors[i][2], sy = anchors[i][3];
+              const dx = (pts[i][0] - ax) * sx;
+              const dy = (pts[i][1] - ay) * sy;
+              if (dx >= -1 && dx <= r + 1 && dy >= -1 && dy <= r + 1) {
+                inherited[i] = r;
+                hit = true;
+              }
+            }
+            if (hit) return { radius: inherited, parentPath: domPath(cur), percent: pr.percent };
+          }
+        }
+      }
+      cur = cur.parentElement;
+    }
+    return undefined;
   };
 
   const collect = (el) => {
@@ -123,6 +205,8 @@ export const getDomCollectScript = (): string => String.raw`
     };
     if (fill) node.fill = fill;
     if (text) node.text = text;
+    const tcw = textContentWidthOf(el);
+    if (tcw !== undefined) node.textContentWidth = tcw;
     if (textColor) node.textColor = textColor;
     const fs = num(cs.fontSize);
     if (fs !== undefined) node.fontSize = fs;
@@ -144,8 +228,20 @@ export const getDomCollectScript = (): string => String.raw`
       const cg = num(cs.columnGap) || 0;
       if (Math.max(rg, cg) > 0) node.gap = Math.max(rg, cg);
     }
-    const radius = radiusOf(cs);
-    if (radius) node.borderRadius = radius;
+    const radius = radiusOf(cs, rect);
+    if (radius) {
+      node.borderRadius = radius.radius;
+      node.radiusSource = 'self';
+      if (radius.percent) node.radiusPercent = true;
+    } else {
+      const pr = parentClipRadius(el, rect);
+      if (pr) {
+        node.borderRadius = pr.radius;
+        node.radiusSource = 'parent-clip';
+        node.radiusParentPath = pr.parentPath;
+        if (pr.percent) node.radiusPercent = true;
+      }
+    }
     const bw = num(cs.borderTopWidth) || 0;
     if (bw > 0 && cs.borderTopStyle !== 'none') {
       node.borderWidth = bw;

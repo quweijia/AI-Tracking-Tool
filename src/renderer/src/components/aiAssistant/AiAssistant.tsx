@@ -8,7 +8,11 @@ import { applyMentions, buildAssistantContext, buildChatMessages, formatMentionN
 import { QUICK_PROMPTS } from '../../assistant/prompt'
 import ChatMessages from './ChatMessages'
 import MentionMenu from './MentionMenu'
+import USelect from '../USelect'
 import assistantImg from '../../assets/ai-assistant.png'
+
+/** 面板宽度持久化 localStorage key（左缘拖拽调整） */
+const PANEL_WIDTH_KEY = 'ai-assistant-panel-width'
 
 /**
  * AI 小助手：右下角悬浮球 + 对话面板（全局常驻，挂在 Layout）。
@@ -31,7 +35,44 @@ export default function AiAssistant() {
   const [mention, setMention] = useState<{ open: boolean; query: string }>({ open: false, query: '' })
   const [confirmClear, setConfirmClear] = useState(false)
   const [quickOpen, setQuickOpen] = useState(false)
+  // 快捷提问悬停预览：输入框 placeholder 临时切换为悬停项文案（灰色），点击填入后恢复黑色正文
+  const [hoverQuick, setHoverQuick] = useState('')
+  // 提示词优化：进行中标记 + 失败提示（输入框上方错误条展示）
+  const [optimizing, setOptimizing] = useState(false)
+  const [optimizeError, setOptimizeError] = useState('')
+  // 优化请求代次计数：非流式 IPC 无法中途取消，点击停止后作废代次、过期响应直接丢弃
+  const optimizeGenRef = useRef(0)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  // 输入区底行模型选择器：可选模型列表 + 面板内选择（'' 为跟随全局默认）
+  const [models, setModels] = useState<{ id: string; name: string }[]>([])
+  const [selModelId, setSelModelId] = useState('')
+  // 面板宽度：localStorage 持久化（拖拽范围 360~720，不超过视口）
+  const [panelWidth, setPanelWidth] = useState(() => {
+    const saved = Number(localStorage.getItem(PANEL_WIDTH_KEY))
+    const max = Math.min(720, window.innerWidth - 32)
+    return Number.isFinite(saved) && saved >= 360 && saved <= max ? saved : 400
+  })
+  const panelWidthRef = useRef(panelWidth)
+  // 左缘拖拽调整宽度（复用侧栏 resizer 模式：mousemove 跟随 + mouseup 持久化）
+  const startPanelResize = (e: React.MouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = panelWidthRef.current
+    document.body.classList.add('ai-panel-resizing')
+    const onMove = (ev: MouseEvent) => {
+      const w = Math.max(360, Math.min(Math.min(720, window.innerWidth - 32), startW + startX - ev.clientX))
+      panelWidthRef.current = w
+      setPanelWidth(w)
+    }
+    const onUp = () => {
+      document.body.classList.remove('ai-panel-resizing')
+      localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidthRef.current))
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   // 路由解析当前项目/页面（非项目/页面路由为空 → 项目级会话）
   const routeMatch = location.pathname.match(/^\/project\/([^/]+)(?:\/page\/([^/]+))?/)
@@ -58,6 +99,52 @@ export default function AiAssistant() {
     return () => window.removeEventListener('ai-assistant-config-change', reloadFabConfig)
   }, [])
 
+  // 模型列表 + 面板选择（设置页保存后经事件即时刷新；面板选择持久化到 aiAssistantModelId）
+  useEffect(() => {
+    const reloadModels = () => {
+      void window.electronAPI
+        .getConfig()
+        .then((cfg) => {
+          const list = ((cfg.aiModels as { id: string; name?: string }[] | undefined) ?? [])
+            .filter((m) => m.id)
+            .map((m) => ({ id: m.id, name: m.name || m.id }))
+          setModels(list)
+          const saved = cfg.aiAssistantModelId as string | undefined
+          setSelModelId(saved && list.some((m) => m.id === saved) ? saved : '')
+        })
+        .catch(() => {
+          setModels([])
+          setSelModelId('')
+        })
+    }
+    reloadModels()
+    window.addEventListener('ai-assistant-config-change', reloadModels)
+    return () => window.removeEventListener('ai-assistant-config-change', reloadModels)
+  }, [])
+
+  /** 解析当前生效模型：面板选择优先 → 助手专用配置 → 全局默认 → 首个（与设置页回退链一致） */
+  const resolveModelId = async (): Promise<string> => {
+    try {
+      const cfg = await window.electronAPI.getConfig()
+      const list = ((cfg.aiModels as { id: string }[] | undefined) ?? []).filter((m) => m.id)
+      if (!list.length) return ''
+      const preferred =
+        selModelId ||
+        ((cfg.aiAssistantModelId as string | undefined) ?? (cfg.aiDefaultModelId as string | undefined) ?? list[0].id)
+      return list.find((m) => m.id === preferred)?.id ?? list[0].id
+    } catch {
+      // 配置读取失败按未配置处理
+      return ''
+    }
+  }
+
+  /** 切换面板模型选择：即时生效 + 持久化 + 广播（设置页与其他监听者同步） */
+  const onModelChange = (v: string) => {
+    setSelModelId(v)
+    void window.electronAPI.setConfig('aiAssistantModelId', v)
+    window.dispatchEvent(new CustomEvent('ai-assistant-config-change'))
+  }
+
   // 项目/页面切换（或面板打开）时加载对应会话历史
   useEffect(() => {
     if (open) void loadSession(projectId, pageId)
@@ -82,10 +169,12 @@ export default function AiAssistant() {
         st.resetStream()
         return
       }
+      if (chunk.reasoning) st.appendReasoning(chunk.reasoning)
       if (chunk.delta) st.appendStreamText(chunk.delta)
       if (chunk.done) {
-        const full = useAiAssistantStore.getState().streamText
-        if (full.trim()) void st.addMessage('assistant', full)
+        const s2 = useAiAssistantStore.getState()
+        const full = s2.streamText
+        if (full.trim()) void st.addMessage('assistant', full, undefined, s2.reasoningText || undefined)
         st.resetStream()
       }
     })
@@ -97,18 +186,8 @@ export default function AiAssistant() {
     const content = raw.trim()
     const st = useAiAssistantStore.getState()
     if (!content || st.streaming) return
-    // 模型配置：助手专用模型 → 全局默认 → 首个（与走查识别取默认模型一致）
-    let modelId = ''
-    try {
-      const cfg = await window.electronAPI.getConfig()
-      const models = ((cfg.aiModels as { id: string }[] | undefined) ?? []).filter((m) => m.id)
-      if (models.length) {
-        const defId = (cfg.aiAssistantModelId as string | undefined) ?? (cfg.aiDefaultModelId as string | undefined) ?? models[0].id
-        modelId = models.find((m) => m.id === defId)?.id ?? models[0].id
-      }
-    } catch {
-      // 配置读取失败按未配置处理
-    }
+    // 模型配置：面板选择 → 助手专用 → 全局默认 → 首个
+    const modelId = await resolveModelId()
     if (!modelId) {
       st.setError(t('modelMissing'))
       return
@@ -194,6 +273,42 @@ export default function AiAssistant() {
     inputRef.current?.focus()
   }
 
+  /** 提示词优化：把输入框草稿交给模型改写为更清晰的提问（非流式，成功后回填输入框） */
+  const optimize = async () => {
+    const draft = text.trim()
+    if (!draft || streaming || optimizing) return
+    // 模型配置：面板选择 → 助手专用 → 全局默认 → 首个（与 send 保持一致）
+    const modelId = await resolveModelId()
+    if (!modelId) {
+      setOptimizeError(t('modelMissing'))
+      return
+    }
+    setOptimizing(true)
+    setOptimizeError('')
+    const gen = ++optimizeGenRef.current
+    try {
+      const res = await window.electronAPI.aiAssistantOptimize({ modelId, draft })
+      if (optimizeGenRef.current !== gen) return // 已点击停止，丢弃过期结果
+      if (res.ok && res.text?.trim()) {
+        setText(res.text.trim())
+        inputRef.current?.focus()
+      } else {
+        setOptimizeError(res.message || t('sendFailed'))
+      }
+    } catch (err) {
+      if (optimizeGenRef.current !== gen) return // 已点击停止，忽略过期报错
+      setOptimizeError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setOptimizing(false)
+    }
+  }
+
+  /** 停止优化：作废进行中的请求（后续返回的结果经代次检查直接丢弃），恢复可再次发起 */
+  const cancelOptimize = () => {
+    optimizeGenRef.current++
+    setOptimizing(false)
+  }
+
   const stop = () => {
     const st = useAiAssistantStore.getState()
     if (st.streamingReqId) void window.electronAPI.aiAssistantAbort(st.streamingReqId)
@@ -227,7 +342,9 @@ export default function AiAssistant() {
 
       {/* 对话面板（fixed 右侧，独立于页面内容） */}
       {open && (
-        <div className="ai-assistant-panel">
+        <div className="ai-assistant-panel" style={{ width: panelWidth }}>
+          {/* 左缘拖拽手柄：向左拖动加宽面板 */}
+          <div className="ai-panel-resizer" onMouseDown={startPanelResize} />
           <div className="ai-assistant-header">
             <span className="ai-assistant-header-icon" aria-hidden>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -285,6 +402,16 @@ export default function AiAssistant() {
                 ))}
               </div>
             )}
+            {optimizeError && (
+              <div className="ai-optimize-error">
+                <span>{optimizeError}</span>
+                <button type="button" aria-label="close" onClick={() => setOptimizeError('')}>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M18 6 6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            )}
             <div className="ai-input-wrap">
               {mention.open && (
                 <MentionMenu
@@ -301,28 +428,59 @@ export default function AiAssistant() {
                 value={text}
                 onChange={onInputChange}
                 onKeyDown={onKeyDown}
-                placeholder={t('inputPlaceholder')}
+                placeholder={hoverQuick || t('inputPlaceholder')}
                 rows={1}
               />
-              {streaming ? (
-                <button type="button" className="ai-send-btn stop" title={t('stop')} onClick={stop}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                    <rect x="6" y="6" width="12" height="12" rx="2" />
-                  </svg>
-                </button>
-              ) : (
-                <button type="button" className="ai-send-btn" title={t('send')} disabled={!text.trim()} onClick={submit}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <path d="m22 2-7 20-4-9-9-4z" />
-                    <path d="M22 2 11 13" />
-                  </svg>
-                </button>
-              )}
+              {/* 底行操作条：左模型选择器 / 右优化 + 发送（TRAE 输入框风格） */}
+              <div className="ai-input-actions">
+                <USelect
+                  className="ai-model-select"
+                  value={selModelId}
+                  onChange={onModelChange}
+                  options={[{ value: '', label: t('modelFollow') }, ...models.map((m) => ({ value: m.id, label: m.name }))]}
+                  disabled={!models.length}
+                  placeholder={t('modelPlaceholder')}
+                />
+                <span className="ai-input-buttons">
+                  <button
+                    type="button"
+                    className={`ai-optimize-btn${optimizing ? ' loading' : ''}`}
+                    title={optimizing ? t('stopOptimize') : t('optimize')}
+                    disabled={!text.trim() || streaming}
+                    onClick={() => (optimizing ? cancelOptimize() : void optimize())}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                      <path d="M10.5 3 Q10.5 10 17.5 10 Q10.5 10 10.5 17 Q10.5 10 3.5 10 Q10.5 10 10.5 3 Z" />
+                      <path d="M17.5 13.5 Q17.5 17.5 21.5 17.5 Q17.5 17.5 17.5 21.5 Q17.5 17.5 13.5 17.5 Q17.5 17.5 17.5 13.5 Z" />
+                    </svg>
+                  </button>
+                  {streaming ? (
+                    <button type="button" className="ai-send-btn stop" title={t('stop')} onClick={stop}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                        <rect x="6" y="6" width="12" height="12" rx="2" />
+                      </svg>
+                    </button>
+                  ) : (
+                    <button type="button" className="ai-send-btn" title={t('send')} disabled={!text.trim()} onClick={submit}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                        <path d="m22 2-7 20-4-9-9-4z" />
+                        <path d="M22 2 11 13" />
+                      </svg>
+                    </button>
+                  )}
+                </span>
+              </div>
             </div>
             <div className={`ai-quick-row${quickOpen ? ' open' : ''}`}>
-              <div className="ai-quick-list">
+              <div className="ai-quick-list" onMouseLeave={() => setHoverQuick('')}>
                 {QUICK_PROMPTS.map((q) => (
-                  <button key={q.key} type="button" className="ai-quick-btn" onClick={() => appendQuick(q.prompt)}>
+                  <button
+                    key={q.key}
+                    type="button"
+                    className="ai-quick-btn"
+                    onMouseEnter={() => setHoverQuick(q.prompt)}
+                    onClick={() => appendQuick(q.prompt)}
+                  >
                     {q.label}
                   </button>
                 ))}

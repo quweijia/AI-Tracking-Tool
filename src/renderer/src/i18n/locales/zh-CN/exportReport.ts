@@ -49,7 +49,8 @@ export default {
   'page.viewReportTip': '点击查看报告',
   'page.totalIssues': '共 {{n}} 个问题',
   'page.deleteRecordTip': '删除记录',
-  'page.confirmDeleteRecord': '确认删除该导出记录？',
+  'page.openFolderTip': '打开所在文件夹',
+  'page.confirmDeleteRecord': '确认删除该导出记录？对应的本地报告文件将一并移入废纸篓。',
   'page.confirmAccept':
     '确认将页面「{{name}}」标记为验收通过吗？\n分析报告列表中该页面的状态将显示为「已完成」。',
   'page.confirmRevokeAccept':
@@ -66,6 +67,7 @@ export default {
   'msg.exportedWithMsg': '已导出（{{msg}}）',
   'msg.exportedToPath': '已导出：{{path}}',
   'msg.exportFailed': '导出失败：{{msg}}',
+  'msg.openFolderFailed': '打开文件夹失败，请检查文件是否存在',
   'msg.unknownError': '未知错误',
   'msg.pageDataNotLoaded': '页面数据未加载',
   'msg.createFailed': '创建{{name}}失败：{{msg}}',
@@ -124,6 +126,10 @@ export default {
   'exportedHtml.detailInfoTitle': '问题信息',
   'exportedHtml.detailRespondTitle': '回应操作',
   'exportedHtml.detailQuestion': '该问题是否已修复？',
+  'exportedHtml.detailMeasure': '测量值',
+  'exportedHtml.detailColor': '取样色值',
+  'exportedHtml.detailSize': '标注尺寸',
+  'exportedHtml.detailSkill': '命中技能',
   'exportedHtml.blockPlaceholder': '请填写无法修复的原因（必填），如：接口暂不支持、下版本处理等',
   'exportedHtml.submit': '提交',
   'exportedHtml.presetRecheckPassed': '（工具内复验已通过）',
