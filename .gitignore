@@ -13,8 +13,9 @@ resources/gates/node_modules/
 .env
 
 # —— v2.0.0 发版决定不入库的本地内容 ——
-# Web 迁移实验目录（含独立 node_modules）
+# Web 迁移实验目录（含独立 node_modules，目录名在 webapp/server 间变动）
 webapp/
+server/
 # TRAE HTML 分享缓存
 .trae-html-share-packages/
 # 验收截图与验收笔记
