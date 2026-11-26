@@ -4,10 +4,15 @@ import { useTranslation } from 'react-i18next'
 import type { ReactNode } from 'react'
 import pkg from '../../../../package.json'
 import appIconUrl from '../assets/app-icon.png'
+import aboutLogoFrameUrl from '../assets/app-icon.png?inline'
+import aboutLogoSpriteUrl from '../assets/about-logo-sprite.png'
 import { db } from '../db'
 import { useSettingsStore } from '../stores/settings'
+import { useProductModeStore } from '../stores/productMode'
 import { useAppIconStore, APP_ICONS, type AppIconKey } from '../stores/appIcon'
 import USelect from '../components/USelect'
+import { Tooltip } from '../components/Tooltip'
+import { confirmDialog } from '../components/ConfirmDialog'
 import { changeAppLang, type AppLang } from '../i18n'
 import {
   DEFAULT_LAYERED_TOLERANCE,
@@ -164,7 +169,7 @@ function ModelModal({
             <button
               key={p.key}
               type="button"
-              className={`preset-chip ${preset === p.key ? 'active' : ''}`}
+              className={`chip preset-chip ${preset === p.key ? 'active' : ''}`}
               onClick={() => applyPreset(p.key)}
             >
               {PRESET_LABELS[p.key]}
@@ -314,11 +319,11 @@ function ModelsSection() {
               <div key={m.id} className={`model-item${m.id === defaultId ? ' default' : ''}`}>
                 <div className="model-item-head">
                   <span className="model-name">{m.name}</span>
-                  {m.id === defaultId && <span className="badge">{t('badgeDefault')}</span>}
+                  {m.id === defaultId && <span className="badge badge-primary">{t('badgeDefault')}</span>}
                   {m.vision ? (
-                    <span className="badge badge-green">{t('badgeVision')}</span>
+                    <span className="badge badge-success">{t('badgeVision')}</span>
                   ) : (
-                    <span className="badge model-badge-gray">{t('badgeTextOnly')}</span>
+                    <span className="badge badge-neutral">{t('badgeTextOnly')}</span>
                   )}
                 </div>
                 <div className="model-item-meta">
@@ -349,20 +354,23 @@ function ModelsSection() {
                   >
                     <IconPlug />
                   </button>
-                  <button type="button" className="icon-btn" title={t('edit')} onClick={() => setEditing(m)}>
-                    <IconPencil />
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-btn danger"
-                    title={t('del')}
-                    onClick={() => {
-                      if (!window.confirm(t('deleteModelConfirm', { name: m.name }))) return
-                      void persistModels(models.filter((x) => x.id !== m.id))
-                    }}
-                  >
-                    <IconTrash />
-                  </button>
+                  <Tooltip label={t('edit')}>
+                    <button type="button" className="icon-btn" onClick={() => setEditing(m)}>
+                      <IconPencil />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label={t('del')}>
+                    <button
+                      type="button"
+                      className="icon-btn danger"
+                      onClick={async () => {
+                        if (!(await confirmDialog({ message: t('deleteModelConfirm', { name: m.name }), tone: 'danger' }))) return
+                        void persistModels(models.filter((x) => x.id !== m.id))
+                      }}
+                    >
+                      <IconTrash />
+                    </button>
+                  </Tooltip>
                 </div>
               </div>
             ))}
@@ -387,6 +395,157 @@ function ModelsSection() {
         />
       )}
     </>
+  )
+}
+
+/** 工作区设置：应用数据（走查图片 / 规范文档 / 标注附件）的存放位置，显示磁盘占用；备份导出压缩包，恢复从压缩包导入 */
+function WorkspaceSettings() {
+  const { t } = useTranslation('settings')
+  const [dir, setDir] = useState('')
+  const [usage, setUsage] = useState(0)
+  const [lastBackup, setLastBackup] = useState(0)
+  const [busy, setBusy] = useState<'backup' | 'restore' | null>(null)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  useEffect(() => {
+    void window.electronAPI.getConfig().then((cfg) => {
+      setLastBackup(typeof cfg.workspaceLastBackup === 'number' ? cfg.workspaceLastBackup : 0)
+    })
+    void refreshUsage()
+  }, [])
+
+  /** 刷新数据目录路径与磁盘占用统计 */
+  const refreshUsage = async () => {
+    const res = await window.electronAPI.workspaceUsage()
+    if (res.ok) {
+      setDir(res.dir)
+      setUsage(res.bytes)
+    }
+  }
+
+  /** 磁盘占用格式化（1024 进制，保留一位小数） */
+  const formatBytes = (n: number): string => {
+    if (n < 1024) return `${n} B`
+    const units = ['KB', 'MB', 'GB', 'TB']
+    let v = n
+    let i = -1
+    do {
+      v /= 1024
+      i++
+    } while (v >= 1024 && i < units.length - 1)
+    return `${v.toFixed(1)} ${units[i]}`
+  }
+
+  /** 更改工作区文件夹：主进程迁移（移动）现有数据并立即生效，随后刷新应用使全部页面走新目录 */
+  const pickDir = async () => {
+    setMsg(null)
+    const res = await window.electronAPI.workspacePick()
+    if (res.ok && res.path) {
+      setMsg({ ok: true, text: t('workspaceMoveOk') })
+      setTimeout(() => window.location.reload(), 800)
+    } else if (res.message) {
+      setMsg({ ok: false, text: res.message })
+    }
+  }
+
+  /** 备份压缩包：全表数据打包传主进程，与模型配置、图片资产一并 zip 到用户指定文件夹 */
+  const backup = async () => {
+    if (busy) return
+    setBusy('backup')
+    setMsg(null)
+    try {
+      const tables: Record<string, unknown[]> = {}
+      for (const table of db.tables) tables[table.name] = await table.toArray()
+      const time = Date.now()
+      const res = await window.electronAPI.workspaceBackup(JSON.stringify({ version: 1, time, tables }))
+      if (res.ok) {
+        setLastBackup(res.time ?? time)
+        setMsg({ ok: true, text: t('workspaceBackupOk', { path: res.path ?? '' }) })
+      } else {
+        setMsg({ ok: false, text: res.message })
+      }
+    } catch (err) {
+      setMsg({ ok: false, text: t('workspaceBackupFail', { msg: err instanceof Error ? err.message : String(err) }) })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  /** 从备份压缩包恢复：全表合并写回（同 ID 以备份为准），换电脑时拷贝压缩包后选择导入 */
+  const restore = async () => {
+    if (busy) return
+    if (!(await confirmDialog({ message: t('workspaceRestoreConfirm'), tone: 'danger' }))) return
+    setBusy('restore')
+    setMsg(null)
+    try {
+      const res = await window.electronAPI.workspaceRestore()
+      if (!res.ok || !res.db) {
+        setMsg({ ok: false, text: res.message })
+        setBusy(null)
+        return
+      }
+      const tables = res.db.tables ?? {}
+      const names = new Set(db.tables.map((tb) => tb.name))
+      await db.transaction('rw', db.tables, async () => {
+        for (const [name, rows] of Object.entries(tables)) {
+          if (!names.has(name) || !Array.isArray(rows)) continue
+          await db.table(name).bulkPut(rows)
+        }
+      })
+      // 配置与库数据已整体恢复，刷新后各设置区与列表按恢复后数据重新加载
+      setMsg({ ok: true, text: t('workspaceRestoreOk') })
+      setTimeout(() => window.location.reload(), 800)
+    } catch (err) {
+      setBusy(null)
+      setMsg({ ok: false, text: t('workspaceRestoreFail', { msg: err instanceof Error ? err.message : String(err) }) })
+    }
+  }
+
+  return (
+    // 不加额外 wrapper：让本行作为 Section 内普通行参与 :first-of-type / :last-of-type 分隔线规则，
+    // 保证「工作区文件夹」与「应用图标」两菜单独立成行、分隔线可见
+    <div className="settings-gen-row">
+      <div className="settings-gen-info">
+        <div className="settings-ws-label-row">
+          <span className="settings-gen-label">{t('workspaceLabel')}</span>
+          {/* 备份 / 恢复弱化为标题右侧的标签按钮，主操作「更改…」留在行右侧 */}
+          <span className="settings-ws-tag-actions">
+            <button
+              type="button"
+              className="settings-ws-tag-btn"
+              disabled={busy !== null}
+              onClick={() => void backup()}
+            >
+              {busy === 'backup' ? t('workspaceBackingUp') : t('workspaceBackup')}
+            </button>
+            <button
+              type="button"
+              className="settings-ws-tag-btn"
+              disabled={busy !== null}
+              onClick={() => void restore()}
+            >
+              {busy === 'restore' ? t('workspaceRestoring') : t('workspaceRestore')}
+            </button>
+          </span>
+        </div>
+        <span className="settings-gen-sub">{t('workspaceDesc')}</span>
+        {dir && <span className="settings-ws-path">{t('workspaceCurrent', { path: dir })}</span>}
+        <span className="settings-ws-path">{t('workspaceUsage', { size: formatBytes(usage) })}</span>
+        {lastBackup > 0 && (
+          <span className="settings-ws-path">{t('workspaceLast', { time: new Date(lastBackup).toLocaleString() })}</span>
+        )}
+        {msg && (
+          <span className="settings-ws-path" style={{ color: msg.ok ? 'var(--success-text)' : 'var(--danger)' }}>
+            {msg.text}
+          </span>
+        )}
+      </div>
+      <div className="settings-ws-actions">
+        <button type="button" className="btn-secondary" onClick={() => void pickDir()}>
+          {t('workspaceChange')}
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -464,6 +623,10 @@ function GeneralSection() {
   const [soundOn, setSoundOn] = useState(true)
   // 设计规范菜单开关（默认开启，关闭后侧边栏隐藏「设计规范」入口）
   const [specMenuOn, setSpecMenuOn] = useState(true)
+  // 产品模式开关：单一事实来源在 useProductModeStore（App 启动时已 load），此处只读 + 写入
+  const productModeOn = useProductModeStore((s) => s.enabled)
+  // 产品模式下隐藏音效和设计规范选项
+  const hideProductOptions = productModeOn
 
   useEffect(() => {
     void window.electronAPI.getConfig().then((cfg) => {
@@ -522,36 +685,70 @@ function GeneralSection() {
       </div>
       <div className="settings-gen-row">
         <div className="settings-gen-info">
-          <span className="settings-gen-label">{t('soundLabel')}</span>
-          <span className="settings-gen-sub">{t('soundDesc')}</span>
+          <span className="settings-gen-label">{t('appModeLabel')}</span>
+          <span className="settings-gen-sub">{t('appModeDesc')}</span>
         </div>
-        <button
-          type="button"
-          className={`switch ${soundOn ? 'on' : ''}`}
-          onClick={() => {
-            const next = !soundOn
-            setSoundOn(next)
-            void window.electronAPI.setConfig('soundEnabled', next)
-          }}
-        />
-      </div>
-      <div className="settings-gen-row">
-        <div className="settings-gen-info">
-          <span className="settings-gen-label">{t('specMenuLabel')}</span>
-          <span className="settings-gen-sub">{t('specMenuDesc')}</span>
+        <div className="segmented">
+          <button
+            type="button"
+            className={`segment-item ${productModeOn ? 'active' : ''}`}
+            onClick={() => {
+              // store 内部统一负责持久化（setConfig productModeEnabled）+ 广播 product-mode-change
+              useProductModeStore.getState().setEnabled(true)
+              console.log('[PRODUCT_MODE] settings switch -> product mode')
+            }}
+          >
+            {t('appModeProduct')}
+          </button>
+          <button
+            type="button"
+            className={`segment-item ${!productModeOn ? 'active' : ''}`}
+            onClick={() => {
+              useProductModeStore.getState().setEnabled(false)
+              console.log('[PRODUCT_MODE] settings switch -> ui mode')
+            }}
+          >
+            {t('appModeUi')}
+          </button>
         </div>
-        <button
-          type="button"
-          className={`switch ${specMenuOn ? 'on' : ''}`}
-          onClick={() => {
-            const next = !specMenuOn
-            setSpecMenuOn(next)
-            void window.electronAPI.setConfig('specMenuEnabled', next)
-            // 通知侧边栏立即显隐「设计规范」菜单
-            window.dispatchEvent(new CustomEvent('spec-menu-change'))
-          }}
-        />
       </div>
+      {!hideProductOptions && (
+        <div className="settings-gen-row">
+          <div className="settings-gen-info">
+            <span className="settings-gen-label">{t('soundLabel')}</span>
+            <span className="settings-gen-sub">{t('soundDesc')}</span>
+          </div>
+          <button
+            type="button"
+            className={`switch ${soundOn ? 'on' : ''}`}
+            onClick={() => {
+              const next = !soundOn
+              setSoundOn(next)
+              void window.electronAPI.setConfig('soundEnabled', next)
+            }}
+          />
+        </div>
+      )}
+      {!hideProductOptions && (
+        <div className="settings-gen-row">
+          <div className="settings-gen-info">
+            <span className="settings-gen-label">{t('specMenuLabel')}</span>
+            <span className="settings-gen-sub">{t('specMenuDesc')}</span>
+          </div>
+          <button
+            type="button"
+            className={`switch ${specMenuOn ? 'on' : ''}`}
+            onClick={() => {
+              const next = !specMenuOn
+              setSpecMenuOn(next)
+              void window.electronAPI.setConfig('specMenuEnabled', next)
+              // 通知侧边栏立即显隐「设计规范」菜单
+              window.dispatchEvent(new CustomEvent('spec-menu-change'))
+            }}
+          />
+        </div>
+      )}
+      <WorkspaceSettings />
       <AppIconPicker />
     </Section>
   )
@@ -792,6 +989,7 @@ function McpModal({
           {t('mcpHelp')}{' '}
           <a
             className="settings-link"
+            draggable={false}
             href="https://help.figma.com/hc/en-us/articles/8045757426179-Manage-personal-access-tokens"
             target="_blank"
             rel="noreferrer"
@@ -910,9 +1108,9 @@ function McpSection() {
               <div className="model-item-head">
                 <span className="model-name">{m.name}</span>
                 {m.enabled !== false ? (
-                  <span className="badge badge-green">{t('mcpEnabled')}</span>
+                  <span className="badge badge-success">{t('mcpEnabled')}</span>
                 ) : (
-                  <span className="badge model-badge-gray">{t('mcpDisabled')}</span>
+                  <span className="badge badge-neutral">{t('mcpDisabled')}</span>
                 )}
                 {/* 右侧操作组：悬停 icon（测试/编辑/删除）+ 常驻开关 */}
                 <div className="mcp-head-actions">
@@ -932,8 +1130,8 @@ function McpSection() {
                     type="button"
                     className="icon-btn danger"
                     title={t('del')}
-                    onClick={() => {
-                      if (!window.confirm(t('deleteMcpConfirm', { name: m.name }))) return
+                    onClick={async () => {
+                      if (!(await confirmDialog({ message: t('deleteMcpConfirm', { name: m.name }), tone: 'danger' }))) return
                       void persist(mcps.filter((x) => x.id !== m.id))
                     }}
                   >
@@ -1134,16 +1332,16 @@ function SkillsSection() {
             <div key={s.id} className="model-item">
               <div className="model-item-head">
                 <span className="model-name">{s.name}</span>
-                <span className="badge model-badge-gray">{t('badgeSkill')}</span>
+                <span className="badge badge-neutral">{t('badgeSkill')}</span>
                 {!!s.guides?.length && (
-                  <span className="badge model-badge-gray" title={t('guidesTitle')}>
+                  <span className="badge badge-neutral" title={t('guidesTitle')}>
                     {t('guidesCount', { count: s.guides.length })}
                   </span>
                 )}
               </div>
               {s.desc && <div className="model-item-meta">{s.desc}</div>}
               {s.url && (
-                <a className="settings-link skill-url" href={s.url} target="_blank" rel="noreferrer">
+                <a className="settings-link skill-url" href={s.url} target="_blank" rel="noreferrer" draggable={false}>
                   {s.url} ↗
                 </a>
               )}
@@ -1155,8 +1353,8 @@ function SkillsSection() {
                   type="button"
                   className="icon-btn danger"
                   title={t('del')}
-                  onClick={() => {
-                    if (!window.confirm(t('deleteSkillConfirm', { name: s.name }))) return
+                  onClick={async () => {
+                    if (!(await confirmDialog({ message: t('deleteSkillConfirm', { name: s.name }), tone: 'danger' }))) return
                     void persist(skills.filter((x) => x.id !== s.id))
                   }}
                 >
@@ -1394,7 +1592,7 @@ function BrowserSection() {
 
   /** 清除内置浏览器保存的浏览数据（Cookies / 本地存储 / 缓存等），登录态将丢失 */
   const clearBrowserData = async () => {
-    if (!window.confirm(t('clearConfirm'))) return
+    if (!(await confirmDialog({ message: t('clearConfirm'), tone: 'danger' }))) return
     setClearing(true)
     setMsg(null)
     try {
@@ -1471,13 +1669,35 @@ function BrowserSection() {
   )
 }
 
+/** 关于页 Logo 雪碧图预载：本模块随应用启动即加载，此刻就开始拉取 4.8MB / 90 帧雪碧图，
+ *  保证用户悬停 Logo 时动效层立即就绪（静态画面由内联小图垫底，不依赖此预载） */
+let aboutSpriteReady = false
+const aboutSpriteReadyPromise = new Promise<void>((resolve) => {
+  const img = new Image()
+  img.onload = () => {
+    aboutSpriteReady = true
+    resolve()
+  }
+  img.onerror = () => resolve() // 预载失败时保持小图兜底，不阻塞渲染
+  img.src = aboutLogoSpriteUrl
+})
+
 /** 关于应用 */
 function AboutSection() {
   const { t } = useTranslation('settings')
+  // 静态画面永久用内联小图（零加载瞬间呈现）；雪碧图仅作悬停动效上层，就绪后挂载（首帧与垫底图同画面，不闪白）
+  const [spriteOn, setSpriteOn] = useState(aboutSpriteReady)
+  useEffect(() => {
+    void aboutSpriteReadyPromise.then(() => setSpriteOn(aboutSpriteReady))
+  }, [])
   return (
     <Section>
       <div className="about-hero">
-        <img className="about-logo" src={appIconUrl} alt={t('aboutAlt')} />
+        {/* Logo：垫底层为内联 data URL 首帧（零网络零解码等待，瞬间呈现），雪碧图仅作悬停动效上层，任何时刻都不空白 */}
+        <div className="about-logo" role="img" aria-label={t('aboutAlt')}>
+          <div className="about-logo-frame" style={{ backgroundImage: `url(${aboutLogoFrameUrl})` }} />
+          {spriteOn && <div className="about-logo-sprite" style={{ backgroundImage: `url(${aboutLogoSpriteUrl})` }} />}
+        </div>
         <div className="about-info">
           <div className="about-name-row">
             <span className="about-name">{t('appName')}</span>
@@ -1491,7 +1711,7 @@ function AboutSection() {
       <div className="about-meta">
         <div className="about-meta-line">
           <span className="about-meta-label">{t('author')}</span>
-          <a className="settings-link" href="https://quweijia.is-a.dev/" target="_blank" rel="noreferrer">
+          <a className="settings-link" href="https://quweijia.is-a.dev/" target="_blank" rel="noreferrer" draggable={false}>
             Vic Qu ↗
           </a>
         </div>
@@ -1517,7 +1737,7 @@ function AssistantSection() {
     window.electronAPI.getConfig().then((cfg) => {
       setVisible((cfg.aiAssistantVisible as boolean | undefined) ?? true)
       const size = Number(cfg.aiAssistantFabSize)
-      setFabSize(Number.isFinite(size) && size >= 28 && size <= 72 ? size : 44)
+      setFabSize(Number.isFinite(size) && size >= 36 && size <= 96 ? size : 44)
       setModelId((cfg.aiAssistantModelId as string | undefined) ?? '')
       setModels(((cfg.aiModels as AIModel[] | undefined) ?? []).filter((m) => m.id))
       setDefId((cfg.aiDefaultModelId as string | undefined) ?? '')
@@ -1551,8 +1771,8 @@ function AssistantSection() {
         </div>
         <input
           type="range"
-          min={28}
-          max={72}
+          min={36}
+          max={96}
           step={2}
           value={fabSize}
           style={{ width: 200, accentColor: 'var(--primary)' }}
@@ -1590,8 +1810,8 @@ function AssistantSection() {
         <button
           type="button"
           className="btn-secondary"
-          onClick={() => {
-            if (!window.confirm(t('assistantClearConfirm'))) return
+          onClick={async () => {
+            if (!(await confirmDialog({ message: t('assistantClearConfirm'), tone: 'danger' }))) return
             void db.assistantMessages.clear().then(() => {
               // 通知打开中的助手面板刷新当前会话
               window.dispatchEvent(new CustomEvent('ai-assistant-history-clear'))

@@ -3,5 +3,6 @@ export default {
   updatedAt: 'Updated {{time}}',
   createdAt: 'Created {{time}}',
   renameTitle: 'Rename',
+  editTitle: 'Edit folder',
   deleteTitle: 'Delete Folder',
 }

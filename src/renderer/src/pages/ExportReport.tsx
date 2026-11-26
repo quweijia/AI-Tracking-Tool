@@ -2,10 +2,13 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { isReportableIssue } from '../../../shared/types'
 import {
   db,
   genId,
+  softDeleteReports,
   Category,
+  Issue,
   ReportRecord,
   CATEGORY_LABELS,
   ISSUE_STATUS_LABELS,
@@ -13,6 +16,7 @@ import {
   PLATFORM_LABELS,
   SHAPE_LABELS
 } from '../db'
+import { confirmDialog } from '../components/ConfirmDialog'
 
 interface ReportIssue {
   id: string
@@ -48,9 +52,15 @@ interface ReportIssue {
   sampleA?: string
   /** 吸色标注取样色值 B */
   sampleB?: string
+  /** 截图附件（导出时读取磁盘原图压缩为 base64 内嵌） */
+  attachments?: { fileName: string; dataUrl: string }[]
 }
 
+/** HTML 报告所在文件夹路径（悬停文件夹 icon 提示用）：取文件路径的目录部分 */
+const folderOf = (p: string): string => p.replace(/[/\\][^/\\]*$/, '') || p
+
 const CAT_COLORS: Record<string, string> = {
+  prototype: '#ec4899',
   spacing: '#2563eb',
   typography: '#7c3aed',
   color: '#f59e0b',
@@ -59,7 +69,11 @@ const CAT_COLORS: Record<string, string> = {
   compatibility: '#16a34a'
 }
 
-const SEV_COLORS: Record<string, string> = { major: '#dc2626', minor: '#f59e0b', suggestion: '#64748b' }
+const SEV_COLORS: Record<string, string> = {
+  major: 'var(--anno-major)',
+  minor: 'var(--anno-minor)',
+  suggestion: 'var(--anno-suggestion)'
+}
 
 /** 生成报告内嵌的 AI 分析区：分类环形图 + 严重度柱状图 + 结构化修复建议 */
 type TranslateFn = (key: string, options?: Record<string, unknown>) => string
@@ -149,6 +163,10 @@ function buildAnalysisHtml(issues: ReportIssue[], t: TranslateFn): string {
 type DocTargetKey = 'feishu' | 'tencent' | 'kingsoft'
 const DOC_TARGET_KEYS: DocTargetKey[] = ['feishu', 'tencent', 'kingsoft']
 
+/** 报告可收录口径（shared.isReportableIssue）：排除未审核 AI 候选；备选（P3）默认不导出，开启开关后仅收录已勾选的备选项 */
+const filterReportable = (list: Issue[], includeOptional: boolean): Issue[] =>
+  list.filter((i) => isReportableIssue(i, includeOptional))
+
 export default function ExportReport() {
   const { t } = useTranslation('exportReport')
   const { projectId, pageId } = useParams<{ projectId: string; pageId: string }>()
@@ -173,6 +191,8 @@ export default function ExportReport() {
   const [feishuLoading, setFeishuLoading] = useState(false)
   /** 文档导出目标（飞书 / 腾讯 / 金山） */
   const [docTarget, setDocTarget] = useState<DocTargetKey>('feishu')
+  /** 是否导出备选参考问题（P3）：默认不导出；开启后仅收录清单中已勾选的备选项（跟随 IssueDrawer 勾选状态） */
+  const [includeOptional, setIncludeOptional] = useState(false)
   /** HTML 报告打开方式：跟随设置页「AI 任务默认浏览器」（builtin 内置浏览器弹窗 / system 系统浏览器） */
   const [browserMode, setBrowserMode] = useState<'builtin' | 'system'>('builtin')
   /** 目标按钮文案（按当前语言构建） */
@@ -223,8 +243,30 @@ export default function ExportReport() {
       counters[set] += 1
       noMap.set(it.id, counters[set])
     })
-    // 未审核的 AI 候选不计入报告（采纳/编辑后才会进入）
-    const reportable = sorted.filter((i) => !(i.isAISuggested && !i.aiConfirmed))
+    // 未审核的 AI 候选不计入报告（采纳/编辑后才会进入）；备选（P3）默认不导出，开启开关后仅收录已勾选项
+    const reportable = filterReportable(sorted, includeOptional)
+
+    // 截图附件：批量读取磁盘原图 → 压缩内嵌（最长边 1600px JPEG q0.8）；单张读取失败静默跳过，不阻塞导出
+    const attachMap = new Map<string, { fileName: string; dataUrl: string }[]>()
+    await Promise.all(
+      reportable
+        .filter((it) => it.attachments && it.attachments.length > 0)
+        .map(async (it) => {
+          const loaded = await Promise.all(
+            (it.attachments ?? []).map(async (a) => {
+              try {
+                const raw = await window.electronAPI.readImage(a.relPath)
+                return raw ? { fileName: a.fileName, dataUrl: await toReportAttachImage(raw) } : null
+              } catch {
+                return null
+              }
+            })
+          )
+          const ok = loaded.filter((x): x is { fileName: string; dataUrl: string } => !!x)
+          if (ok.length) attachMap.set(it.id, ok)
+        })
+    )
+
     const reportIssues: ReportIssue[] = reportable.map((issue, idx) => ({
       id: issue.id,
       no: noMap.get(issue.id) ?? idx + 1,
@@ -249,6 +291,7 @@ export default function ExportReport() {
       measureValue: issue.measureValue,
       sampleA: issue.sampleA,
       sampleB: issue.sampleB,
+      attachments: attachMap.get(issue.id),
       sourceLabel:
         issue.source === 'structured'
           ? t('sourceStructured')
@@ -277,7 +320,7 @@ export default function ExportReport() {
         <div class="canvas-title">${title}<button class="fs-btn" data-card="card-${key}" onclick="toggleFs('card-${key}')">${t('exportedHtml.fullscreen')}</button></div>
         <div class="rep-canvas" id="canvas-${key}">
           <div class="rep-stage" id="stage-${key}">
-            ${img ? `<img id="img-${key}" src="${img}" alt="${title}">` : `<div style="padding:40px;text-align:center;color:#98a2b3">${emptyText}</div>`}
+            ${img ? `<img id="img-${key}" src="${img}" alt="${title}">` : `<div style="padding:40px;text-align:center;color:var(--text-3)">${emptyText}</div>`}
             <svg class="arrow-layer" id="arrows-${key}"></svg>
             <div class="markers" id="markers-${key}"></div>
           </div>
@@ -351,6 +394,7 @@ export default function ExportReport() {
       detailColor: t('exportedHtml.detailColor'),
       detailSize: t('exportedHtml.detailSize'),
       detailSkill: t('exportedHtml.detailSkill'),
+      detailAttachments: t('exportedHtml.detailAttachments'),
       blockPlaceholder: t('exportedHtml.blockPlaceholder'),
       submit: t('exportedHtml.submit'),
       presetRecheckPassed: t('exportedHtml.presetRecheckPassed'),
@@ -368,55 +412,55 @@ export default function ExportReport() {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(t('exportedHtml.title', { name: page?.pageName ?? '' }))}</title>
 <style>
-  :root { --primary:#2563eb; --danger:#dc2626; --done:#16a34a; --text:#1f2937; --text2:#667085; --border:#e7eaf0; --bg:#f5f6f8; }
+  :root { --primary:#2563eb; --primary-dark:#1d4ed8; --primary-soft:#eff4ff; --danger:#dc2626; --success:#16a34a; --text:#1f2937; --text-2:#667085; --text-3:#98a2b3; --text-btn:#344054; --surface-sunken:#f6f7f9; --border:#e7eaf0; --bg:#f5f6f8; --card-bg:#fff; --radius:12px; --radius-sm:8px; --shadow-card:0 1px 2px rgba(16,24,40,.04); --shadow-pop:0 12px 32px rgba(16,24,40,.14); --anno-suggestion:#667085; --anno-minor:#f59e0b; --anno-minor-text:#b45309; --anno-major:#dc2626; --fill:#f2f4f8; --fill-soft:#fafbfd; --surface-inset:#f9fafb; --success-soft:#e8f7ee; --success-text:#15803d; --danger-soft:#fde8e8; --warning-soft:#fef3c7; --border-strong:#dfe3ea; }
   * { margin:0; padding:0; box-sizing:border-box; }
   body { font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Segoe UI',sans-serif; background:var(--bg); color:var(--text); padding:28px 32px 60px; }
   .wrap { max-width:1100px; margin:0 auto; }
   .rep-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:20px; }
   .rep-header h1 { font-size:22px; font-weight:700; letter-spacing:-0.01em; }
-  .meta { color:var(--text2); font-size:13px; margin-top:6px; line-height:1.7; }
+  .meta { color:var(--text-2); font-size:13px; margin-top:8px; line-height:1.7; }
   .meta a { color:var(--primary); text-decoration:none; word-break:break-all; }
   .meta a:hover { text-decoration:underline; }
-  .stats { display:flex; gap:14px; margin:18px 0 22px; }
-  .stat { flex:1; background:#fff; border:1px solid var(--border); border-radius:12px; padding:16px; text-align:center; box-shadow:0 1px 2px rgba(16,24,40,.04); }
+  .stats { display:flex; gap:16px; margin:16px 0 24px; }
+  .stat { flex:1; background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); padding:16px; text-align:center; box-shadow:var(--shadow-card); }
   .stat .num { font-size:26px; font-weight:700; }
   .stat .num.pend { color:var(--primary); }
-  .stat .num.done { color:var(--done); }
+  .stat .num.done { color:var(--success); }
   .stat .num.blocked { color:var(--danger); }
-  .stat .lbl { font-size:12px; color:var(--text2); margin-top:4px; }
-  .canvas-card { background:#fff; border:1px solid var(--border); border-radius:12px; overflow:hidden; margin-bottom:20px; box-shadow:0 1px 2px rgba(16,24,40,.04); }
+  .stat .lbl { font-size:12px; color:var(--text-2); margin-top:4px; }
+  .canvas-card { background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; margin-bottom:20px; box-shadow:var(--shadow-card); }
   .canvas-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; margin-bottom:24px; }
   .canvas-grid .canvas-card { margin-bottom:0; }
   .canvas-group-title { font-size:15px; font-weight:700; color:var(--text); margin:4px 0 12px; }
-  .canvas-title { padding:10px 14px; border-bottom:1px solid var(--border); font-size:12px; font-weight:600; color:var(--text2); display:flex; align-items:center; gap:8px; }
+  .canvas-title { padding:12px 16px; border-bottom:1px solid var(--border); font-size:12px; font-weight:600; color:var(--text-2); display:flex; align-items:center; gap:8px; }
   .canvas-title::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--primary); }
-  .rep-canvas { position:relative; background:#f6f7f9; }
+  .rep-canvas { position:relative; background:var(--surface-sunken); }
   .rep-canvas img { width:100%; display:block; user-select:none; }
   /* 标注舞台：锚定图片实际盒（宽 100% 高随图），全屏时容器被 flex 拉伸/滚动也不影响标注坐标 */
   .rep-stage { position:relative; width:100%; }
-  .fs-btn { margin-left:auto; padding:3px 10px; font-size:12px; color:var(--text2); background:#fff; border:1px solid var(--border); border-radius:6px; cursor:pointer; }
+  .fs-btn { margin-left:auto; padding:4px 12px; font-size:12px; color:var(--text-2); background:var(--card-bg); border:1px solid var(--border); border-radius:6px; cursor:pointer; }
   .fs-btn:hover { color:var(--primary); border-color:var(--primary); background:var(--primary-soft); }
-  .canvas-card:fullscreen, .canvas-card:-webkit-full-screen { background:#eef1f6; padding:14px; display:flex; flex-direction:column; overflow:auto; border-radius:0; }
-  .canvas-card:fullscreen .canvas-title, .canvas-card:-webkit-full-screen .canvas-title { border-radius:8px; border:1px solid var(--border); }
-  .canvas-card:fullscreen .rep-canvas, .canvas-card:-webkit-full-screen .rep-canvas { flex:1; min-height:0; overflow:auto; background:#fff; border-radius:8px; }
+  .canvas-card:fullscreen, .canvas-card:-webkit-full-screen { background:#eef1f6; padding:16px; display:flex; flex-direction:column; overflow:auto; border-radius:0; }
+  .canvas-card:fullscreen .canvas-title, .canvas-card:-webkit-full-screen .canvas-title { border-radius:var(--radius-sm); border:1px solid var(--border); }
+  .canvas-card:fullscreen .rep-canvas, .canvas-card:-webkit-full-screen .rep-canvas { flex:1; min-height:0; overflow:auto; background:var(--card-bg); border-radius:var(--radius-sm); }
   .rep-canvas svg.arrow-layer { position:absolute; inset:0; width:100%; height:100%; z-index:1; overflow:visible; }
   .markers { position:absolute; inset:0; z-index:2; pointer-events:none; }
   .markers .mk { pointer-events:auto; }
   /* 框选宿主必须保持穿透（优先级需高于上一行），仅边框命中带 .mk-hit 可点 */
   .markers .mk-box { pointer-events:none; }
-  .hint-bar { font-size:13px; color:var(--text2); background:#fff; border:1px solid var(--border); border-radius:10px; padding:10px 16px; margin-bottom:20px; line-height:1.7; }
+  .hint-bar { font-size:13px; color:var(--text-2); background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px 16px; margin-bottom:20px; line-height:1.7; }
   /* 标注标记（--mk-c 同时定义在 .mk 与报告箭头元素上，避免箭头线取不到颜色） */
   .mk { position:absolute; cursor:pointer; }
-  :is(.mk, .rep-arrow, .rep-arrow-head, .rep-measure, .rep-measure-label) { --mk-c:#2563eb; }
-  :is(.mk, .rep-arrow, .rep-arrow-head, .rep-measure, .rep-measure-label).sev-major { --mk-c:#ef4444; }
-  :is(.mk, .rep-arrow, .rep-arrow-head, .rep-measure, .rep-measure-label).sev-minor { --mk-c:#f59e0b; }
-  :is(.mk, .rep-arrow, .rep-arrow-head, .rep-measure, .rep-measure-label).sev-suggestion { --mk-c:#64748b; }
+  :is(.mk, .rep-arrow, .rep-arrow-head, .rep-measure, .rep-measure-label) { --mk-c:var(--primary); }
+  :is(.mk, .rep-arrow, .rep-arrow-head, .rep-measure, .rep-measure-label).sev-major { --mk-c:var(--anno-major); }
+  :is(.mk, .rep-arrow, .rep-arrow-head, .rep-measure, .rep-measure-label).sev-minor { --mk-c:var(--anno-minor); }
+  :is(.mk, .rep-arrow, .rep-arrow-head, .rep-measure, .rep-measure-label).sev-suggestion { --mk-c:var(--anno-suggestion); }
   /* 测量线：未回应保持严重度/自定义色，已修复后变绿；尺寸数字不随回应状态变色 */
   /* 已修复后测量线同样变绿（去掉内联色后由该规则接管）；尺寸文字不变色 */
-  :is(.mk, .rep-arrow, .rep-arrow-head, .rep-measure).done { --mk-c:var(--done); }
+  :is(.mk, .rep-arrow, .rep-arrow-head, .rep-measure).done { --mk-c:var(--success); }
   :is(.mk, .rep-arrow, .rep-arrow-head).blocked { --mk-c:var(--danger); }
   /* 框选标注对齐编辑器标准：仅边框 16px 命中带可点（±8px 外扩），矩形内部点击穿透不触发弹窗，序号徽章可点 */
-  .mk-box { border:2px solid var(--mk-c); border-radius:3px; background:color-mix(in srgb, var(--mk-c) 6%, transparent); pointer-events:none; }
+  .mk-box { border:2px solid var(--mk-c); border-radius:4px; background:color-mix(in srgb, var(--mk-c) 6%, transparent); pointer-events:none; }
   .mk-hit { position:absolute; pointer-events:auto; cursor:pointer; }
   .mk-hit-t { left:-8px; right:-8px; top:-8px; height:16px; }
   .mk-hit-b { left:-8px; right:-8px; bottom:-8px; height:16px; }
@@ -425,13 +469,20 @@ export default function ExportReport() {
   .mk-box .mk-num { pointer-events:auto; }
   /* 详情面板扩展信息（测量值/取样色值/标注尺寸/命中技能） */
   .dp-extra { border-top:1px solid var(--border); margin-top:8px; padding-top:8px; }
-  .dp-row { display:flex; align-items:flex-start; gap:8px; padding:3px 0; font-size:12px; line-height:20px; }
-  .dp-key { color:var(--text2); flex-shrink:0; min-width:64px; }
+  .dp-row { display:flex; align-items:flex-start; gap:8px; padding:4px 0; font-size:12px; line-height:20px; }
+  .dp-key { color:var(--text-2); flex-shrink:0; min-width:64px; }
   .dp-val { color:var(--text); word-break:break-all; }
-  .dp-swatch { display:inline-flex; align-items:center; gap:6px; margin-right:10px; }
-  .dp-dot { width:14px; height:14px; border-radius:3px; border:1px solid var(--border); flex-shrink:0; }
-  .dp-chip { display:inline-block; padding:1px 8px; border-radius:10px; background:color-mix(in srgb, var(--primary) 10%, transparent); color:var(--primary); font-size:11px; line-height:18px; margin:1px 4px 1px 0; }
-  .mk-num { position:absolute; top:-11px; left:-11px; min-width:20px; height:20px; padding:0 5px; border-radius:999px; background:var(--mk-c); color:var(--mk-t,#fff); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 2px #fff; }
+  .dp-swatch { display:inline-flex; align-items:center; gap:8px; margin-right:12px; }
+  .dp-dot { width:14px; height:14px; border-radius:4px; border:1px solid var(--border); flex-shrink:0; }
+  .dp-chip { display:inline-block; padding:1px 8px; border-radius:var(--radius); background:color-mix(in srgb, var(--primary) 10%, transparent); color:var(--primary); font-size:11px; line-height:18px; margin:1px 4px 1px 0; }
+  /* 截图附件：详情弹窗缩略图网格 + 点击查看大图浮层（z-index 盖过详情面板 20） */
+  .dp-att-grid { display:flex; flex-wrap:wrap; gap:8px; }
+  .dp-att { width:56px; height:56px; border-radius:6px; border:1px solid var(--border); object-fit:cover; cursor:zoom-in; display:block; background:var(--surface-inset); }
+  .dp-att:hover { border-color:var(--primary); }
+  #att-view { position:fixed; inset:0; z-index:40; background:rgba(16,24,40,.78); display:none; align-items:center; justify-content:center; cursor:zoom-out; }
+  #att-view.show { display:flex; }
+  #att-view img { max-width:88vw; max-height:88vh; border-radius:8px; box-shadow:var(--shadow-pop); background:#fff; transition:transform .12s ease; }
+  .mk-num { position:absolute; top:-11px; left:-11px; min-width:20px; height:20px; padding:0 4px; border-radius:999px; background:var(--mk-c); color:var(--mk-t,#fff); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; box-shadow:0 0 0 2px #fff; }
   /* 测量序号徽章：锚定线中点，数字对面一侧（mk-mh 水平线数字在上→序号在下；mk-mv 垂直线数字在右→序号在左） */
   .mk-mh .mk-num { top:6px; left:0; transform:translate(-50%,0); }
   .mk-mv .mk-num { top:0; left:-6px; transform:translate(-100%,-50%); }
@@ -439,12 +490,12 @@ export default function ExportReport() {
   .mk-pin .mk-num { position:static; box-shadow:none; background:transparent; }
   /* 点位标注回应后：数字+对号并排，圆点改全角胶囊、宽度自适应 */
   .mk-pin.done, .mk-pin.blocked { width:auto; min-width:22px; border-radius:999px; padding:0; }
-  .mk-label { transform:translateY(-50%); background:rgba(255,255,255,.96); border:1.5px solid var(--mk-c); color:var(--mk-c); border-radius:999px; padding:2px 10px 2px 2px; font-size:12px; font-weight:600; max-width:280px; display:flex; align-items:center; gap:6px; }
+  .mk-label { transform:translateY(-50%); background:rgba(255,255,255,.96); border:1.5px solid var(--mk-c); color:var(--mk-c); border-radius:999px; padding:2px 12px 2px 2px; font-size:12px; font-weight:600; max-width:280px; width:max-content; display:flex; align-items:center; gap:8px; }
   .mk-label .mk-num { position:static; flex-shrink:0; }
-  .mk-label .mk-text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mk-label .mk-text { white-space:pre-line; line-height:1.45; overflow-wrap:anywhere; }
   .mk:hover { filter:brightness(1.08); }
   /* 回应后数字+对号并排：保持全圆角胶囊形，仅增加内边距让内容不再挤 */
-  .mk.done .mk-num, .mk.blocked .mk-num { padding:0 7px; }
+  .mk.done .mk-num, .mk.blocked .mk-num { padding:0 8px; }
   .mk.done .mk-num::after { content:'✓'; margin-left:2px; }
   .mk.blocked .mk-num::after { content:'✕'; margin-left:2px; }
   .rep-arrow { stroke:var(--mk-c); stroke-width:2.5; fill:none; pointer-events:none; }
@@ -456,7 +507,7 @@ export default function ExportReport() {
   .rep-measure-label { fill:var(--mk-c); font-size:12.5px; font-weight:700; dominant-baseline:central; paint-order:stroke; stroke:#fff; stroke-width:4px; pointer-events:auto; cursor:pointer; }
   .rep-measure-hit { stroke:transparent; stroke-width:14; fill:none; pointer-events:stroke; cursor:pointer; }
   /* 吸色取样标注 */
-  .mk-pick { display:flex; align-items:center; gap:6px; transform:translate(-7px,-50%); background:rgba(255,255,255,.96); border:1.5px solid var(--mk-c); border-radius:999px; padding:2px 10px 2px 3px; font-size:12px; font-weight:600; color:#1f2733; max-width:190px; }
+  .mk-pick { display:flex; align-items:center; gap:8px; transform:translate(-8px,-50%); background:rgba(255,255,255,.96); border:1.5px solid var(--mk-c); border-radius:999px; padding:2px 12px 2px 4px; font-size:12px; font-weight:600; color:#1f2733; max-width:190px; width:max-content; }
   .mk-pick .mk-num { position:static; flex-shrink:0; }
   .mk-pick-chip { width:16px; height:16px; border-radius:50%; flex-shrink:0; box-shadow:0 0 0 1.5px #fff, 0 1px 3px rgba(0,0,0,.2); }
   .mk-pick-text { line-height:1.35; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -465,98 +516,98 @@ export default function ExportReport() {
   /* 详情面板：右侧抽屉滑出，遮罩淡入淡出；内容按卡片分区 */
   .detail-mask { position:fixed; inset:0; background:rgba(16,24,40,.35); z-index:19; opacity:0; pointer-events:none; transition:opacity .22s ease; }
   .detail-mask.show { opacity:1; pointer-events:auto; }
-  .detail-panel { position:fixed; top:0; right:0; bottom:0; width:400px; max-width:92vw; background:#f7f8fa; z-index:20; box-shadow:-8px 0 30px rgba(16,24,40,.14); padding:18px; overflow:auto; transform:translateX(103%); transition:transform .28s cubic-bezier(.22,.61,.36,1); }
+  .detail-panel { position:fixed; top:0; right:0; bottom:0; width:400px; max-width:92vw; background:var(--surface-sunken); z-index:20; box-shadow:-8px 0 30px rgba(16,24,40,.14); padding:16px; overflow:auto; transform:translateX(103%); transition:transform .28s cubic-bezier(.22,.61,.36,1); }
   .detail-panel.show { transform:translateX(0); }
   /* 全屏查看时详情改为居中弹窗（不再用右侧抽屉）；关闭后 opacity:0 仍残留原尺寸，必须禁用命中，否则隐形面板会挡住画面中央标注的点击 */
   .detail-panel.as-modal { top:50%; left:50%; right:auto; bottom:auto; width:min(640px,92vw); max-height:86vh; border-radius:16px; box-shadow:0 24px 64px rgba(16,24,40,.32); opacity:0; transform:translate(-50%,-46%); pointer-events:none; transition:transform .22s ease, opacity .22s ease; }
   .detail-panel.as-modal.show { opacity:1; transform:translate(-50%,-50%); pointer-events:auto; }
   .hidden { display:none !important; }
-  .dp-head { display:flex; align-items:flex-start; gap:10px; margin-bottom:14px; }
-  .dp-no { width:28px; height:28px; border-radius:9px; color:#fff; font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; background:#2563eb; box-shadow:0 1px 3px rgba(16,24,40,.18); }
-  .dp-no.sev-major { background:#ef4444; } .dp-no.sev-minor { background:#f59e0b; } .dp-no.sev-suggestion { background:#64748b; }
-  .dp-no.done { background:var(--done); } .dp-no.blocked { background:var(--danger); }
+  .dp-head { display:flex; align-items:flex-start; gap:12px; margin-bottom:16px; }
+  .dp-no { width:28px; height:28px; border-radius:8px; color:#fff; font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; background:var(--primary); box-shadow:0 1px 3px rgba(16,24,40,.18); }
+  .dp-no.sev-major { background:var(--anno-major); } .dp-no.sev-minor { background:var(--anno-minor); } .dp-no.sev-suggestion { background:var(--anno-suggestion); }
+  .dp-no.done { background:var(--success); } .dp-no.blocked { background:var(--danger); }
   .dp-head-main { flex:1; min-width:0; }
   .dp-head h3 { font-size:15px; line-height:1.5; word-break:break-all; }
-  .dp-sub { font-size:12px; color:var(--text2); margin-top:3px; }
-  .dp-close { border:none; background:none; font-size:22px; color:#98a2b3; cursor:pointer; line-height:1; flex-shrink:0; }
+  .dp-sub { font-size:12px; color:var(--text-2); margin-top:4px; }
+  .dp-close { border:none; background:none; font-size:22px; color:var(--text-3); cursor:pointer; line-height:1; flex-shrink:0; }
   .dp-close:hover { color:var(--text); }
-  .dp-card { background:#fff; border:1px solid var(--border); border-radius:12px; padding:14px; margin-bottom:12px; box-shadow:0 1px 2px rgba(16,24,40,.04); }
-  .dp-card-label { font-size:11px; font-weight:600; color:var(--text2); letter-spacing:.02em; margin-bottom:8px; }
+  .dp-card { background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:12px; box-shadow:var(--shadow-card); }
+  .dp-card-label { font-size:11px; font-weight:600; color:var(--text-2); letter-spacing:.02em; margin-bottom:8px; }
   .dp-card:last-child { margin-bottom:0; }
-  .dp-meta { display:flex; flex-wrap:wrap; gap:6px; }
-  .tag { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:500; white-space:nowrap; }
-  .tag.sev-major { background:#fde8e8; color:#dc2626; } .tag.sev-minor { background:#fef3c7; color:#b45309; } .tag.sev-suggestion { background:#f2f4f8; color:#667085; }
-  .tag.plain { background:#f2f4f8; color:#667085; }
-  .tag.st-pending { background:#eff4ff; color:#2563eb; }
-  .tag.st-fixed { background:#e8f7ee; color:#15803d; }
-  .dp-q { font-size:14px; font-weight:600; margin:0 0 10px; }
-  .dp-actions { display:flex; gap:10px; }
-  .btn { padding:8px 16px; border-radius:8px; font-size:13px; font-weight:500; cursor:pointer; border:1px solid transparent; }
+  .dp-meta { display:flex; flex-wrap:wrap; gap:8px; }
+  .tag { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:500; white-space:nowrap; }
+  .tag.sev-major { background:var(--danger-soft); color:var(--anno-major); } .tag.sev-minor { background:var(--warning-soft); color:var(--anno-minor-text); } .tag.sev-suggestion { background:var(--fill); color:var(--anno-suggestion); }
+  .tag.plain { background:var(--fill); color:var(--text-2); }
+  .tag.st-pending { background:var(--primary-soft); color:var(--primary); }
+  .tag.st-fixed { background:var(--success-soft); color:var(--success-text); }
+  .dp-q { font-size:14px; font-weight:600; margin:0 0 12px; }
+  .dp-actions { display:flex; gap:12px; }
+  .btn { padding:8px 16px; border-radius:var(--radius-sm); font-size:13px; font-weight:500; cursor:pointer; border:1px solid transparent; }
   .btn-primary { background:var(--primary); color:#fff; }
-  .btn-primary:hover { background:#1d4ed8; }
-  .btn-ghost-danger { background:#fff; color:var(--danger); border-color:#f2c1c1; }
+  .btn-primary:hover { background:var(--primary-dark); }
+  .btn-ghost-danger { background:var(--card-bg); color:var(--danger); border-color:#f2c1c1; }
   .btn-ghost-danger:hover { background:#fef2f2; }
   .btn-text { background:none; border:none; color:var(--primary); font-size:13px; cursor:pointer; padding:0; margin-top:12px; }
-  .dp-actions .btn-ghost { background:#fff; border:1px solid var(--border); color:var(--text2); }
+  .dp-actions .btn-ghost { background:var(--card-bg); border:1px solid var(--border); color:var(--text-2); }
   .block-form { margin-top:12px; display:flex; flex-direction:column; gap:8px; }
-  .block-form textarea { width:100%; min-height:76px; padding:10px; border:1px solid #dfe3ea; border-radius:8px; font-size:13px; font-family:inherit; resize:vertical; outline:none; }
+  .block-form textarea { width:100%; min-height:76px; padding:12px; border:1px solid var(--border-strong); border-radius:var(--radius-sm); font-size:13px; font-family:inherit; resize:vertical; outline:none; }
   .block-form textarea:focus { border-color:var(--primary); }
   .block-form .btn { align-self:flex-start; }
-  .dp-state { border-radius:10px; padding:12px 14px; font-size:14px; font-weight:600; margin:0 0 4px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .dp-state.done { background:#e8f7ee; color:#15803d; }
-  .dp-state.blocked { background:#fde8e8; color:#dc2626; }
+  .dp-state { border-radius:var(--radius); padding:12px 16px; font-size:14px; font-weight:600; margin:0 0 4px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .dp-state.done { background:var(--success-soft); color:var(--success-text); }
+  .dp-state.blocked { background:var(--danger-soft); color:var(--danger); }
   .dp-time { font-size:12px; font-weight:400; opacity:.8; }
-  .dp-reason { font-size:13px; color:var(--text); background:#fafbfd; border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin-top:8px; line-height:1.7; }
-  .btn-export { padding:8px 16px; border-radius:8px; font-size:13px; font-weight:500; cursor:pointer; border:1px solid transparent; background:var(--primary); color:#fff; }
+  .dp-reason { font-size:13px; color:var(--text); background:var(--fill-soft); border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px 12px; margin-top:8px; line-height:1.7; }
+  .btn-export { padding:8px 16px; border-radius:var(--radius-sm); font-size:13px; font-weight:500; cursor:pointer; border:1px solid transparent; background:var(--primary); color:#fff; }
   .btn-export:disabled { background:#b8ccf7; cursor:not-allowed; }
   /* 导出确认弹窗 */
   .modal-mask-rc { position:fixed; inset:0; background:rgba(16,24,40,.45); z-index:30; display:flex; align-items:center; justify-content:center; }
-  .modal-rc { background:#fff; border-radius:14px; padding:22px 24px; width:380px; max-width:90vw; box-shadow:0 12px 40px rgba(16,24,40,.2); }
-  .modal-rc h3 { font-size:16px; margin-bottom:10px; }
-  .modal-rc p { font-size:13px; color:var(--text2); line-height:1.7; margin-bottom:18px; }
-  .modal-rc-actions { display:flex; gap:10px; justify-content:flex-end; }
-  .btn-plain { background:#f2f4f8; color:var(--text); }
+  .modal-rc { background:var(--card-bg); border-radius:16px; padding:24px; width:380px; max-width:90vw; box-shadow:0 12px 40px rgba(16,24,40,.2); }
+  .modal-rc h3 { font-size:16px; margin-bottom:12px; }
+  .modal-rc p { font-size:13px; color:var(--text-2); line-height:1.7; margin-bottom:16px; }
+  .modal-rc-actions { display:flex; gap:12px; justify-content:flex-end; }
+  .btn-plain { background:var(--fill); color:var(--text); }
   /* 问题明细清单 */
-  .issue-table-wrap { background:#fff; border:1px solid var(--border); border-radius:12px; overflow:hidden; box-shadow:0 1px 2px rgba(16,24,40,.04); }
+  .issue-table-wrap { background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; box-shadow:var(--shadow-card); }
   .issue-table-wrap table { width:100%; border-collapse:collapse; }
-  .issue-table-wrap th, .issue-table-wrap td { padding:10px 14px; border-bottom:1px solid var(--border); font-size:13px; text-align:left; vertical-align:top; }
+  .issue-table-wrap th, .issue-table-wrap td { padding:12px 16px; border-bottom:1px solid var(--border); font-size:13px; text-align:left; vertical-align:top; }
   .issue-table-wrap tr:last-child td { border-bottom:none; }
-  .issue-table-wrap th { background:#f9fafb; color:#667085; font-size:12px; font-weight:600; white-space:nowrap; }
+  .issue-table-wrap th { background:var(--surface-inset); color:var(--text-2); font-size:12px; font-weight:600; white-space:nowrap; }
   .issue-table-wrap .tag { white-space:nowrap; }
   .issue-table-wrap tbody tr { cursor:pointer; }
   .issue-table-wrap tbody tr:hover { background:#f8faff; }
-  .tag.st-wait { background:#f2f4f8; color:#98a2b3; }
+  .tag.st-wait { background:var(--fill); color:var(--text-3); }
   /* AI 报告分析 */
-  .ai-analysis-body { padding:16px 14px; }
-  .chart-row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-  .chart-block { background:#f9fafb; border:1px solid var(--border); border-radius:10px; padding:14px; min-width:0; }
-  .chart-block-title { font-size:12px; font-weight:600; color:var(--text2); margin-bottom:12px; }
-  .sug-block { margin-top:14px; }
-  .donut-wrap { display:flex; align-items:center; gap:18px; }
+  .ai-analysis-body { padding:16px 16px; }
+  .chart-row { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .chart-block { background:var(--surface-inset); border:1px solid var(--border); border-radius:var(--radius); padding:16px; min-width:0; }
+  .chart-block-title { font-size:12px; font-weight:600; color:var(--text-2); margin-bottom:12px; }
+  .sug-block { margin-top:16px; }
+  .donut-wrap { display:flex; align-items:center; gap:16px; }
   .donut-legend { display:flex; flex-direction:column; gap:8px; flex:1; min-width:0; }
   .legend-row { display:flex; align-items:center; gap:8px; font-size:12px; }
-  .legend-dot { width:10px; height:10px; border-radius:3px; flex-shrink:0; }
+  .legend-dot { width:10px; height:10px; border-radius:4px; flex-shrink:0; }
   .legend-name { flex:1; color:var(--text); }
-  .legend-val { color:var(--text2); font-weight:600; white-space:nowrap; }
-  .bar-row { display:flex; align-items:center; gap:10px; }
-  .bar-row + .bar-row { margin-top:14px; }
-  .bar-label { width:48px; font-size:12px; color:var(--text2); flex-shrink:0; }
+  .legend-val { color:var(--text-2); font-weight:600; white-space:nowrap; }
+  .bar-row { display:flex; align-items:center; gap:12px; }
+  .bar-row + .bar-row { margin-top:16px; }
+  .bar-label { width:48px; font-size:12px; color:var(--text-2); flex-shrink:0; }
   .bar-track { flex:1; height:14px; background:#eef0f4; border-radius:999px; overflow:hidden; }
   .bar-fill { height:100%; border-radius:999px; }
   .bar-count { width:22px; text-align:right; font-size:12px; font-weight:600; flex-shrink:0; }
-  .sug-list { display:flex; flex-direction:column; gap:10px; }
-  .sug-item { display:flex; gap:12px; background:#fff; border:1px solid var(--border); border-radius:10px; padding:12px 14px; }
-  .sug-no { width:22px; height:22px; border-radius:7px; color:#fff; font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:1px; }
+  .sug-list { display:flex; flex-direction:column; gap:12px; }
+  .sug-item { display:flex; gap:12px; background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px 16px; }
+  .sug-no { width:22px; height:22px; border-radius:8px; color:#fff; font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:1px; }
   .sug-body { flex:1; min-width:0; }
   .sug-title { font-size:13px; font-weight:600; margin-bottom:8px; line-height:1.6; }
   .sug-row { display:flex; gap:8px; font-size:12px; line-height:1.7; margin-top:4px; }
-  .sug-key { flex-shrink:0; background:#f2f4f8; color:#667085; border-radius:5px; padding:1px 7px; font-weight:600; white-space:nowrap; height:fit-content; }
-  .sug-key.fix { background:#eff4ff; color:#2563eb; }
-  .sug-key.prop { background:#fef3c7; color:#b45309; }
+  .sug-key { flex-shrink:0; background:var(--fill); color:var(--text-2); border-radius:6px; padding:1px 8px; font-weight:600; white-space:nowrap; height:fit-content; }
+  .sug-key.fix { background:var(--primary-soft); color:var(--primary); }
+  .sug-key.prop { background:var(--warning-soft); color:var(--anno-minor-text); }
   .sug-val { flex:1; min-width:0; word-break:break-word; }
-  .sug-val.mono { font-family:ui-monospace,Menlo,Consolas,monospace; color:#374151; }
-  .sug-empty { font-size:13px; color:var(--text2); line-height:1.7; }
-  footer { margin-top:32px; color:#9ca3af; font-size:12px; text-align:center; }
+  .sug-val.mono { font-family:ui-monospace,Menlo,Consolas,monospace; color:var(--text-btn); }
+  .sug-empty { font-size:13px; color:var(--text-2); line-height:1.7; }
+  footer { margin-top:32px; color:var(--text-3); font-size:12px; text-align:center; }
 </style>
 </head>
 <body>
@@ -590,6 +641,8 @@ export default function ExportReport() {
 
 <div id="detail-mask" class="detail-mask" onclick="closeDetail()"></div>
 <aside id="detail-panel" class="detail-panel"></aside>
+
+<div id="att-view" onclick="closeAttach()"><img id="att-view-img" alt=""></div>
 
 <div id="export-confirm" class="modal-mask-rc hidden">
   <div class="modal-rc">
@@ -651,6 +704,7 @@ function syncFsBtn() {
 /** 全屏时把详情遮罩/抽屉挂进当前全屏元素，退出时移回 body：全屏内点标注直接弹出详情，无需退出 */
 var detailMaskEl = document.getElementById('detail-mask');
 var detailPanelEl = document.getElementById('detail-panel');
+var attViewEl = document.getElementById('att-view');
 function syncDetailHost() {
   syncFsBtn();
   var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
@@ -660,6 +714,8 @@ function syncDetailHost() {
   if (detailPanelEl) detailPanelEl.classList.toggle('as-modal', !!fsEl);
   if (detailMaskEl && detailMaskEl.parentElement !== host) host.appendChild(detailMaskEl);
   if (detailPanelEl && detailPanelEl.parentElement !== host) host.appendChild(detailPanelEl);
+  // 截图附件大图浮层：全屏时同样迁移到全屏元素内，否则被 Fullscreen API 裁剪掉
+  if (attViewEl && attViewEl.parentElement !== host) host.appendChild(attViewEl);
 }
 document.addEventListener('fullscreenchange', syncDetailHost);
 document.addEventListener('webkitfullscreenchange', syncDetailHost);
@@ -953,6 +1009,15 @@ function extraInfo(i) {
     for (var k = 0; k < tags.length; k++) chips += '<span class="dp-chip">' + esc(tags[k]) + '</span>';
     rows += '<div class="dp-row"><span class="dp-key">' + T.detailSkill + '</span><span class="dp-val">' + chips + '</span></div>';
   }
+  // 截图附件：缩略图网格，点击查看大图（dataUrl 为压缩内嵌图，直接复用 src 避免双份 base64）
+  var atts = i.attachments || [];
+  if (atts.length) {
+    var grid = '';
+    for (var ai = 0; ai < atts.length; ai++) {
+      grid += '<img class="dp-att" src="' + atts[ai].dataUrl + '" alt="' + esc(atts[ai].fileName) + '" title="' + esc(atts[ai].fileName) + '" onclick="openAttach(this)">';
+    }
+    rows += '<div class="dp-row"><span class="dp-key">' + T.detailAttachments + '</span><span class="dp-val"><span class="dp-att-grid">' + grid + '</span></span></div>';
+  }
   return rows ? '<div class="dp-extra">' + rows + '</div>' : '';
 }
 function renderDetail() {
@@ -1019,6 +1084,35 @@ function closeDetail() {
   document.getElementById('detail-mask').classList.remove('show');
   document.getElementById('detail-panel').classList.remove('show');
 }
+// 截图附件大图浮层：缩略图点击放大 / 点击任意处关闭 / 滚轮缩放（0.2~8 倍）
+var attScale = 1;
+function applyAttScale() {
+  var img = document.getElementById('att-view-img');
+  if (img) img.style.transform = 'scale(' + attScale + ')';
+}
+function openAttach(img) {
+  attScale = 1;
+  var el = document.getElementById('att-view-img');
+  el.src = img.src;
+  el.style.transform = 'none';
+  document.getElementById('att-view').classList.add('show');
+}
+function closeAttach() {
+  attScale = 1;
+  var img = document.getElementById('att-view-img');
+  img.style.transform = 'none';
+  img.src = '';
+  document.getElementById('att-view').classList.remove('show');
+}
+// attViewEl 复用上方全屏迁移处已取的元素引用
+if (attViewEl) {
+  attViewEl.addEventListener('wheel', function (ev) {
+    if (!this.classList.contains('show')) return;
+    ev.preventDefault();
+    attScale = Math.min(8, Math.max(0.2, attScale + (ev.deltaY < 0 ? 0.2 : -0.2)));
+    applyAttScale();
+  }, { passive: false });
+}
 function respond(state) {
   if (!currentId) return;
   responses[currentId] = { state: state, reason: '', at: Date.now() };
@@ -1077,26 +1171,27 @@ function doExportSummary() {
       ? '<span class="tag st-wait">' + T.tagUnresponded + '</span>'
       : r.state === 'fixed'
         ? '<span class="tag st-fixed">' + T.tagDone + '</span>'
-        : '<span class="tag sev-major">' + T.tagBlocked + '</span>' + (r.reason ? '<div class="dp-reason" style="margin-top:6px">' + esc(r.reason) + '</div>' : '');
+        : '<span class="tag sev-major">' + T.tagBlocked + '</span>' + (r.reason ? '<div class="dp-reason" style="margin-top:8px">' + esc(r.reason) + '</div>' : '');
     return '<tr><td>' + i.no + '</td><td>' + esc(stripSkillTagsOf(i.description || '')) + '</td><td><span class="tag sev-' + i.severity + '">' + esc(i.severityLabel) + '</span></td><td style="white-space:nowrap">' + esc(i.categoryLabel) + '</td><td style="white-space:nowrap">' + esc(i.sourceLabel) + '</td><td style="white-space:nowrap">' + esc(i.targetLabel) + '</td><td>' + result + '</td></tr>';
   }).join('');
   var html = '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>' + T.devReportHeading + ' - ' + esc(DATA.pageName) + '</title><style>' +
-    'body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;background:#f5f6f8;color:#1f2937;padding:32px;}' +
-    '.wrap{max-width:1000px;margin:0 auto;}h1{font-size:22px;margin-bottom:6px;}' +
-    '.meta{color:#667085;font-size:13px;margin-bottom:20px;line-height:1.7;}' +
-    '.meta a{color:#2563eb;text-decoration:none;word-break:break-all;}.meta a:hover{text-decoration:underline;}' +
-    '.stats{display:flex;gap:14px;margin-bottom:22px;}' +
-    '.stat{flex:1;background:#fff;border:1px solid #e7eaf0;border-radius:12px;padding:16px;text-align:center;}' +
-    '.stat .num{font-size:26px;font-weight:700;}.stat .num.g{color:#16a34a;}.stat .num.r{color:#dc2626;}' +
-    '.stat .lbl{font-size:12px;color:#667085;margin-top:4px;}' +
-    'table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #e7eaf0;border-radius:12px;overflow:hidden;}' +
-    'th,td{padding:10px 14px;border-bottom:1px solid #e7eaf0;font-size:13px;text-align:left;vertical-align:top;}' +
-    'th{background:#f9fafb;color:#667085;font-size:12px;}' +
-    '.tag{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:500;}' +
-    '.st-fixed{background:#e8f7ee;color:#15803d;}.st-wait{background:#f2f4f8;color:#667085;}' +
-    '.sev-major{background:#fde8e8;color:#dc2626;}.sev-minor{background:#fef3c7;color:#b45309;}.sev-suggestion{background:#f2f4f8;color:#667085;}' +
-    '.dp-reason{font-size:12px;color:#667085;background:#fafbfd;border:1px solid #e7eaf0;border-radius:6px;padding:6px 10px;}' +
-    'footer{margin-top:28px;color:#9ca3af;font-size:12px;text-align:center;}' +
+    ':root{--primary:#2563eb;--text:#1f2937;--text-2:#667085;--text-3:#98a2b3;--bg:#f5f6f8;--card-bg:#fff;--border:#e7eaf0;--radius:12px;--success:#16a34a;--danger:#dc2626;--fill:#f2f4f8;--fill-soft:#fafbfd;--surface-inset:#f9fafb;--success-soft:#e8f7ee;--success-text:#15803d;--danger-soft:#fde8e8;--warning-soft:#fef3c7;--warning-text:#b45309;--anno-suggestion:#667085;--anno-major:#dc2626;}' +
+    'body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;background:var(--bg);color:var(--text);padding:32px;}' +
+    '.wrap{max-width:1000px;margin:0 auto;}h1{font-size:22px;margin-bottom:8px;}' +
+    '.meta{color:var(--text-2);font-size:13px;margin-bottom:20px;line-height:1.7;}' +
+    '.meta a{color:var(--primary);text-decoration:none;word-break:break-all;}.meta a:hover{text-decoration:underline;}' +
+    '.stats{display:flex;gap:16px;margin-bottom:24px;}' +
+    '.stat{flex:1;background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;}' +
+    '.stat .num{font-size:26px;font-weight:700;}.stat .num.g{color:var(--success);}.stat .num.r{color:var(--danger);}' +
+    '.stat .lbl{font-size:12px;color:var(--text-2);margin-top:4px;}' +
+    'table{width:100%;border-collapse:collapse;background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}' +
+    'th,td{padding:12px 16px;border-bottom:1px solid var(--border);font-size:13px;text-align:left;vertical-align:top;}' +
+    'th{background:var(--surface-inset);color:var(--text-2);font-size:12px;}' +
+    '.tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:500;}' +
+    '.st-fixed{background:var(--success-soft);color:var(--success-text);}.st-wait{background:var(--fill);color:var(--text-2);}' +
+    '.sev-major{background:var(--danger-soft);color:var(--anno-major);}.sev-minor{background:var(--warning-soft);color:var(--warning-text);}.sev-suggestion{background:var(--fill);color:var(--anno-suggestion);}' +
+    '.dp-reason{font-size:12px;color:var(--text-2);background:var(--fill-soft);border:1px solid var(--border);border-radius:6px;padding:8px 12px;}' +
+    'footer{margin-top:28px;color:var(--text-3);font-size:12px;text-align:center;}' +
     '</style></head><body><div class="wrap">' +
     '<h1>' + T.devReportHeading + '</h1>' +
     '<div class="meta"><strong>' + T.labelProject + '</strong>' + esc(DATA.projectName) + '　<strong>' + T.labelPage + '</strong>' + esc(DATA.pageName) + '　<strong>' + T.labelPlatform + '</strong>' + esc(DATA.platformLabel) + (DATA.figmaUrl ? '　<strong>' + T.labelDesign + '</strong><a href="' + esc(DATA.figmaUrl) + '" target="_blank">' + T.openInFigma + '</a>' : '') + '<br><strong>' + T.labelExportedAt + '</strong>' + new Date().toLocaleString('zh-CN') + '</div>' +
@@ -1160,11 +1255,12 @@ renderAll();
     setResultMsg(null)
     try {
       const html = await generateReportHTML()
-      const name = `走查报告_${page?.pageName ?? '页面'}_${new Date().toISOString().slice(0, 10)}.html`
+      const now = new Date()
+      const name = `走查报告_${page?.pageName ?? '页面'}_${now.toISOString().slice(0, 10)}_${now.toTimeString().slice(0, 8)}.html`
       const res = await window.electronAPI.exportReport(html, name)
       if (res && res.ok && res.path) {
         // 写入导出历史（失败不阻塞导出本身）
-        const exportTotal = (issues ?? []).filter((i) => !(i.isAISuggested && !i.aiConfirmed)).length
+        const exportTotal = filterReportable(issues ?? [], includeOptional).length
         await db.reportRecords
           .add({
             id: genId(),
@@ -1233,6 +1329,37 @@ renderAll();
       }
     })
 
+  /** 截图附件压缩为 JPEG（最长边 1600px、q0.8），控制报告 HTML 体积；失败回退原图 */
+  const toReportAttachImage = (dataUrl: string): Promise<string> =>
+    new Promise((resolve) => {
+      try {
+        const img = new Image()
+        img.onload = () => {
+          try {
+            const MAX = 1600
+            const scale = Math.min(1, MAX / Math.max(img.width, img.height))
+            const w = Math.max(1, Math.round(img.width * scale))
+            const h = Math.max(1, Math.round(img.height * scale))
+            const canvas = document.createElement('canvas')
+            canvas.width = w
+            canvas.height = h
+            const ctx = canvas.getContext('2d')
+            if (!ctx) return resolve(dataUrl)
+            ctx.fillStyle = '#ffffff'
+            ctx.fillRect(0, 0, w, h)
+            ctx.drawImage(img, 0, 0, w, h)
+            resolve(canvas.toDataURL('image/jpeg', 0.8))
+          } catch {
+            resolve(dataUrl)
+          }
+        }
+        img.onerror = () => resolve(dataUrl)
+        img.src = dataUrl
+      } catch {
+        resolve(dataUrl)
+      }
+    })
+
   /** HTML 报告文本转 base64 dataUrl（TextEncoder 保证中文不乱码） */
   const htmlToDataUrl = (html: string): string => {
     const bytes = new TextEncoder().encode(html)
@@ -1256,7 +1383,7 @@ renderAll();
     const sorted = [...(issues ?? [])].sort(
       (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)
     )
-    const reportable = sorted.filter((i) => !(i.isAISuggested && !i.aiConfirmed))
+    const reportable = filterReportable(sorted, includeOptional)
     const doneCount = reportable.filter((i) => i.status === 'fixed').length
     // 与画布编号口径一致：全量标注按 imgSet 分组独立编号（manual/walk 各自 1..n）
     const noMap = new Map<string, number>()
@@ -1454,7 +1581,7 @@ renderAll();
     setResultMsg(null)
     try {
       const title = t('exportedHtml.title', { name: page.pageName })
-      const reportable = (issues ?? []).filter((i) => !(i.isAISuggested && !i.aiConfirmed)).length
+      const reportable = filterReportable(issues ?? [], includeOptional).length
       const res = await window.electronAPI.kingsoftCreateReport({ title })
       if (!res.ok) {
         setResultMsg({ type: 'error', text: t('msg.createFailed', { name: target.name, msg: res.message }) })
@@ -1489,10 +1616,18 @@ renderAll();
 
   const total = issues?.length ?? 0
   const pending = issues?.filter((i) => i.status === 'pending').length ?? 0
+  /** 备选参考问题（P3）：总数与已勾选数（导出开关行展示用；无备选项时不显示开关） */
+  const optionalCount = issues?.filter((i) => i.level === 'optional').length ?? 0
+  const optionalCheckedCount = issues?.filter((i) => i.level === 'optional' && i.optionalChecked).length ?? 0
 
-  /** 当前页面已导出的报告历史记录 */
+  /** 当前页面已导出的报告历史记录（按导出时间倒序：最新在最上面；排除已软删进回收站的记录） */
   const reportHistory = useLiveQuery(
-    () => db.reportRecords.where('pageId').equals(pageId!).sortBy('createdAt'),
+    () =>
+      db.reportRecords
+        .where('pageId')
+        .equals(pageId!)
+        .filter((r) => !r.deletedAt)
+        .sortBy('createdAt:desc'),
     [pageId]
   )
   /** 当前项目 / 页面名称（用于显示） */
@@ -1507,18 +1642,11 @@ renderAll();
     dev: t('type.dev')
   }
 
-  /** 删除报告历史记录：同时把对应的本地 HTML 报告文件移入废纸篓（文件删除失败仅提示，不阻断删记录） */
+  /** 删除报告历史记录：软删进回收站（保留期内可从回收站还原；HTML 文件保留在磁盘，
+   *  彻底删除/过期清理时才移入废纸篓） */
   const handleDeleteReport = async (record: ReportRecord) => {
-    if (!window.confirm(t('page.confirmDeleteRecord'))) return
-    if (record.type === 'html' && record.filePath) {
-      try {
-        const res = await window.electronAPI.deleteReportFile(record.filePath)
-        if (!res.ok) setResultMsg({ type: 'warn', text: res.message })
-      } catch {
-        setResultMsg({ type: 'warn', text: t('msg.unknownError') })
-      }
-    }
-    await db.reportRecords.delete(record.id)
+    if (!(await confirmDialog({ message: t('page.confirmDeleteRecord'), tone: 'danger' }))) return
+    await softDeleteReports([record.id], 'walk')
   }
 
   /** 打开 HTML 报告文件：跟随设置页「AI 任务默认浏览器」（内置浏览器弹窗 / 系统浏览器） */
@@ -1535,18 +1663,20 @@ renderAll();
     window.open(url, '_blank')
   }
 
-  /** 验收通过：写入页面验收状态，分析报告列表状态列联动显示「已完成」 */
+  /** 验收通过：写入页面验收状态，分析报告列表状态列联动显示「已完成」；
+   *  同时把当前页面的标注状态全部置为「已修复」 */
   const handleAccept = async () => {
     if (!page) return
-    const ok = window.confirm(t('page.confirmAccept', { name: page.pageName }))
+    const ok = await confirmDialog({ message: t('page.confirmAccept', { name: page.pageName }) })
     if (!ok) return
     await db.pages.update(page.id, { accepted: true, acceptedAt: Date.now() })
+    await db.issues.where('pageId').equals(page.id).modify({ status: 'fixed' })
   }
 
   /** 取消验收：状态恢复为「进行中」 */
   const handleRevokeAccept = async () => {
     if (!page) return
-    const ok = window.confirm(t('page.confirmRevokeAccept', { name: page.pageName }))
+    const ok = await confirmDialog({ message: t('page.confirmRevokeAccept', { name: page.pageName }) })
     if (!ok) return
     await db.pages.update(page.id, { accepted: false })
   }
@@ -1555,7 +1685,7 @@ renderAll();
     <div className="page">
       <div className="page-header">
         <div>
-          <Link to={`/project/${projectId}/page/${pageId}`} className="back-link">
+          <Link to={`/project/${projectId}/page/${pageId}`} className="back-link" draggable={false}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M15 18l-6-6 6-6" />
             </svg>
@@ -1591,6 +1721,17 @@ renderAll();
           {t('page.issueSummary', { total, pending })}
         </p>
         <p className="export-note">{t('page.interactiveNote')}</p>
+        {/* 备选参考问题（P3）导出开关：默认不导出；开启后仅收录清单中已勾选的备选项（HTML 与在线文档口径一致） */}
+        {optionalCount > 0 && (
+          <label className="export-optional-row" title={t('page.includeOptionalTip')}>
+            <input
+              type="checkbox"
+              checked={includeOptional}
+              onChange={(e) => setIncludeOptional(e.target.checked)}
+            />
+            <span>{t('page.includeOptional', { checked: optionalCheckedCount, total: optionalCount })}</span>
+          </label>
+        )}
         <div className="wizard-actions export-actions">
           <div className="export-actions-left">
             <button className="btn-primary" onClick={handleExport} disabled={exporting || feishuLoading || !page}>
@@ -1616,7 +1757,7 @@ renderAll();
           <div className="export-actions-right">
             {page?.accepted ? (
               <>
-                <span className="export-accepted-badge">{t('page.acceptedBadge')}</span>
+                <span className="badge badge-success badge-lg">{t('page.acceptedBadge')}</span>
                 <button className="btn-secondary" onClick={handleRevokeAccept} title={t('page.revokeAcceptTip')}>
                   {t('page.revokeAccept')}
                 </button>
@@ -1652,7 +1793,7 @@ renderAll();
                 title={t('page.viewReportTip')}
               >
                 <div className="report-history-main">
-                  <span className="report-history-type-badge" title={typeLabel[record.type] || record.type}>
+                  <span className="badge badge-primary report-history-type-badge" title={typeLabel[record.type] || record.type}>
                     {typeLabel[record.type] || record.type}
                   </span>
                   <span className="report-history-name">{record.name}</span>
@@ -1673,7 +1814,7 @@ renderAll();
                           })
                           .catch(() => setResultMsg({ type: 'error', text: t('msg.openFolderFailed') }))
                       }}
-                      title={t('page.openFolderTip')}
+                      title={folderOf(record.filePath!)}
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                         <path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z" />

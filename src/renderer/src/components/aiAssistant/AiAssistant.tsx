@@ -87,7 +87,7 @@ export default function AiAssistant() {
         .then((cfg) => {
           setFabVisible((cfg.aiAssistantVisible as boolean | undefined) ?? true)
           const size = Number(cfg.aiAssistantFabSize)
-          const clamped = Number.isFinite(size) && size >= 28 && size <= 72 ? size : 44
+          const clamped = Number.isFinite(size) && size >= 36 && size <= 96 ? size : 44
           setFabSize(clamped)
           // 同步 CSS 变量：back-top 等固定元素按悬浮球实际尺寸避让
           document.documentElement.style.setProperty('--ai-fab-size', `${clamped}px`)
@@ -357,7 +357,7 @@ export default function AiAssistant() {
               </svg>
             </span>
             <span className="ai-assistant-title">{t('title')}</span>
-            <span className={`ai-session-pill${projectId || pageId ? '' : ' none'}`}>
+            <span className={`chip chip-sm ai-session-pill${projectId || pageId ? '' : ' none'}`}>
               {projectId || pageId ? (
                 <>
                   <span className="ai-session-dot" aria-hidden />
@@ -387,7 +387,7 @@ export default function AiAssistant() {
             {refs.length > 0 && (
               <div className="ai-input-refs">
                 {refs.map((r) => (
-                  <span key={`${r.type}-${r.id}`} className="ai-ref-chip">
+                  <span key={`${r.type}-${r.id}`} className="chip chip-sm ai-ref-chip">
                     @{mentionChipLabel(r)}
                     <button
                       type="button"

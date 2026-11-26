@@ -11,9 +11,12 @@ interface LoupeRect {
 interface Props {
   /** 当前画布图片（放大镜像素采样来源） */
   dataUrl: string
-  /** 鼠标视口坐标 */
+  /** 鼠标视口坐标：放大镜圆跟随光标移动保持跟手 */
   clientX: number
   clientY: number
+  /** 父层锁定的采样像素：逐像素步进动画趋近光标像素（点击时精确吸附），内容与十字准星锚定于此 */
+  px: number
+  py: number
   /** 画布视口矩形（贴边翻转判断用） */
   rect: LoupeRect
 }
@@ -24,43 +27,60 @@ const ZOOM_MAX = 16
 const ZOOM_DEFAULT = 8
 /** 放大镜目标直径（按倍率取整到源像素网格，保证像素格对齐） */
 const LOUPE_TARGET = 148
-/** 与鼠标光标的偏移距离（避开光标与十字准星） */
+/** 与光标的偏移距离（避开光标与十字准星） */
 const CURSOR_OFFSET = 18
 /** 色值信息条尺寸 */
 const CHIP_W = 118
 const CHIP_H = 46
 
 /** 像素放大镜（测量 / 吸色工具共用）：
- * 挂载在 body 的 fixed 图层（pointer-events: none），跟随鼠标圆形放大当前画布像素。
+ * 挂载在 body 的 fixed 图层（pointer-events: none）。
+ * 圆随光标跟手移动；内容与十字准星锚定父层锁定的采样像素（始终为光标下的图像像素）。
  * 最近邻放大（关闭图像平滑）+ 浅灰像素网格 + 中心十字准线 + 侧边 HEX/RGB 色值条。
  * 滚轮调节倍率（capture 阶段拦截，避免冒泡触发外层画布缩放）。 */
-export default function PixelLoupe({ dataUrl, clientX, clientY, rect }: Props) {
+export default function PixelLoupe({ dataUrl, clientX, clientY, px, py, rect }: Props) {
   const [zoom, setZoom] = useState(ZOOM_DEFAULT)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  /** 像素采样离屏画布缓存（按 src 失效） */
-  const sampleRef = useRef<{ src: string; canvas: HTMLCanvasElement } | null>(null)
-  /** 离屏画布就绪版本号（加载完成后自增触发重绘） */
-  const [ready, setReady] = useState(0)
+  /** 整图像素缓存：离屏 canvas（绘制源）+ ImageData 数组（中心取色），一次性读取、按 src 失效 */
+  const sampleRef = useRef<{
+    src: string
+    canvas: HTMLCanvasElement
+    w: number
+    h: number
+    data: Uint8ClampedArray
+  } | null>(null)
+  /** 图像原始尺寸（displayScale 定位换算用，加载完成后设置） */
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null)
   /** 中心像素颜色（hex 未变化则跳过 setState） */
   const [color, setColor] = useState<{ hex: string; r: number; g: number; b: number } | null>(null)
   const lastHexRef = useRef<string | null>(null)
 
-  // 切换设计稿/重新加载图片：重建采样画布并重置倍率
+  // 切换设计稿/重新加载图片：重建整图像素缓存并重置倍率
   useEffect(() => {
     setZoom(ZOOM_DEFAULT)
+    setDims(null)
+    setColor(null)
+    lastHexRef.current = null
     let cancelled = false
     const img = new Image()
     img.onload = () => {
       if (cancelled) return
+      const w = img.naturalWidth
+      const h = img.naturalHeight
+      if (!w || !h) return
       const canvas = document.createElement('canvas')
-      canvas.width = img.naturalWidth
-      canvas.height = img.naturalHeight
+      canvas.width = w
+      canvas.height = h
       const ctx = canvas.getContext('2d', { willReadFrequently: true })
       if (!ctx) return
-      ctx.drawImage(img, 0, 0)
-      sampleRef.current = { src: dataUrl, canvas }
-      lastHexRef.current = null
-      setReady((v) => v + 1)
+      try {
+        ctx.drawImage(img, 0, 0)
+        // 整图 ImageData 一次性读取，之后中心取色只查数组（禁止逐帧 getImageData）
+        sampleRef.current = { src: dataUrl, canvas, w, h, data: ctx.getImageData(0, 0, w, h).data }
+        setDims({ w, h })
+      } catch {
+        /* 跨域图片等取不到像素时保持缓存为空 */
+      }
     }
     img.src = dataUrl
     return () => {
@@ -79,20 +99,15 @@ export default function PixelLoupe({ dataUrl, clientX, clientY, rect }: Props) {
     return () => window.removeEventListener('wheel', onWheel, { capture: true })
   }, [])
 
-  // 重绘：鼠标位置 / 倍率 / 图片变化时执行（父层已做 rAF 节流）
+  // 重绘：锁定像素 / 倍率 / 图片变化时执行（像素锁定由父层状态机控制，同一像素内不重绘）
   useEffect(() => {
     const entry = sampleRef.current
     const canvas = canvasRef.current
-    if (!entry || !canvas) return
-    const nw = entry.canvas.width
-    const nh = entry.canvas.height
-    if (!nw || !nh) return
+    if (!entry || !canvas || !dims) return
 
-    // 鼠标视口坐标 → 画布归一化 → 图片原始像素（与 sampleColor 同一约定，四舍五入取整对齐像素）
-    const nx = Math.min(1, Math.max(0, (clientX - rect.left) / (rect.width || 1)))
-    const ny = Math.min(1, Math.max(0, (clientY - rect.top) / (rect.height || 1)))
-    const px = Math.min(nw - 1, Math.max(0, Math.round(nx * nw)))
-    const py = Math.min(nh - 1, Math.max(0, Math.round(ny * nh)))
+    // 锁定像素钳制到图内（父层已钳制，这里兜底）
+    const cx = Math.min(entry.w - 1, Math.max(0, Math.round(px)))
+    const cy = Math.min(entry.h - 1, Math.max(0, Math.round(py)))
 
     // 半径取整使直径 = (2r+1)×倍率，中心采样像素精确居中、网格完美对齐
     const r = Math.max(2, Math.round(LOUPE_TARGET / (2 * zoom)))
@@ -110,7 +125,7 @@ export default function PixelLoupe({ dataUrl, clientX, clientY, rect }: Props) {
     ctx.imageSmoothingEnabled = false
     ctx.clearRect(0, 0, size, size)
     try {
-      ctx.drawImage(entry.canvas, px - r, py - r, srcSpan, srcSpan, 0, 0, size, size)
+      ctx.drawImage(entry.canvas, cx - r, cy - r, srcSpan, srcSpan, 0, 0, size, size)
     } catch {
       return
     }
@@ -134,9 +149,9 @@ export default function PixelLoupe({ dataUrl, clientX, clientY, rect }: Props) {
     ctx.strokeRect(c - zoom / 2 + 0.5, c - zoom / 2 + 0.5, zoom - 1, zoom - 1)
 
     // 细十字准线（深色描边 + 白色细线，深浅底色都可见）
-    // 对齐像素网格：准星贴齐中心像素格的左/上边界网格线（r*zoom + 0.5），而非悬在格子中间
+    // 准星穿过中心像素的正中心：画布测量端点锚定像素中心（px+0.5），两者严格对齐，消除十字光标与实测位置的偏移
     const drawCross = (w: number, style: string) => {
-      const g = c - zoom / 2 + 0.5
+      const g = c
       ctx.lineWidth = w
       ctx.strokeStyle = style
       ctx.beginPath()
@@ -149,22 +164,25 @@ export default function PixelLoupe({ dataUrl, clientX, clientY, rect }: Props) {
     drawCross(3, 'rgba(0, 0, 0, 0.55)')
     drawCross(1, 'rgba(255, 255, 255, 0.95)')
 
-    // 中心像素色值（HEX / RGB）
-    try {
-      const d = entry.canvas.getContext('2d', { willReadFrequently: true })!.getImageData(px, py, 1, 1).data
-      const hex = `#${[d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, '0')).join('')}`.toUpperCase()
-      if (hex !== lastHexRef.current) {
-        lastHexRef.current = hex
-        setColor({ hex, r: d[0], g: d[1], b: d[2] })
-      }
-    } catch {
-      /* 跨域图片等场景取不到像素时保持上次色值 */
+    // 中心像素色值（HEX / RGB）：读整图缓存数组，不做逐帧 getImageData
+    const o = (cy * entry.w + cx) * 4
+    const hex = `#${[entry.data[o], entry.data[o + 1], entry.data[o + 2]]
+      .map((v) => v.toString(16).padStart(2, '0'))
+      .join('')}`.toUpperCase()
+    if (hex !== lastHexRef.current) {
+      lastHexRef.current = hex
+      setColor({ hex, r: entry.data[o], g: entry.data[o + 1], b: entry.data[o + 2] })
     }
-  }, [ready, zoom, clientX, clientY, rect])
+  }, [dims, zoom, px, py])
 
-  // 定位：默认在鼠标右下方，贴近画布右/下边缘时翻转到左/上方；色值条贴放大镜外侧
+  // 倍率 → 放大镜直径
   const r = Math.max(2, Math.round(LOUPE_TARGET / (2 * zoom)))
   const size = (2 * r + 1) * zoom
+  // 像素未就绪（图片加载中）不渲染，避免空白圆环闪现在错误位置
+  if (!dims) return null
+
+  // 圆随光标跟手：默认在光标右下方，贴近画布右/下边缘时翻转到左/上方；色值条贴放大镜外侧
+  // 内容与十字准星锚定锁定像素（px/py），采样点逐格步进不跳格
   let lx = clientX + CURSOR_OFFSET
   let ly = clientY + CURSOR_OFFSET
   if (lx + size > rect.left + rect.width) lx = clientX - CURSOR_OFFSET - size

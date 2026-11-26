@@ -73,6 +73,10 @@ export function checkA11y(
   const vw = viewport.width || 1
   const vh = viewport.height || 1
 
+  /** 文本类标注框：直接文本渲染包围盒优先（容器直挂文本时定位到文字实际位置），回退元素包围盒 */
+  const rectOf = (n: StyleNode): { x: number; y: number; width: number; height: number } =>
+    n.textRect ?? { x: n.x, y: n.y, width: n.width, height: n.height }
+
   const visit = (n: StyleNode): void => {
     if (out.length < MAX_FINDINGS && n.width > 0 && n.height > 0) {
       const tag = n.name.split(/[.#]/)[0]?.toLowerCase() ?? ''
@@ -103,11 +107,12 @@ export function checkA11y(
             const c = kindCount.get('contrast-low') ?? 0
             if (c < MAX_PER_KIND) {
               kindCount.set('contrast-low', c + 1)
+              const tr = rectOf(n)
               out.push({
                 kind: 'contrast-low',
                 category: 'color',
                 severity: 'minor',
-                rect: { x: n.x / vw, y: n.y / vh, width: n.width / vw, height: n.height / vh },
+                rect: { x: tr.x / vw, y: tr.y / vh, width: tr.width / vw, height: tr.height / vh },
                 node: n,
                 domPath: n.domPath,
                 actualText: `${(Math.round(ratio * 100) / 100).toFixed(2)}:1`,
@@ -123,11 +128,12 @@ export function checkA11y(
         const c = kindCount.get('font-too-small') ?? 0
         if (c < MAX_PER_KIND) {
           kindCount.set('font-too-small', c + 1)
+          const tr = rectOf(n)
           out.push({
             kind: 'font-too-small',
             category: 'typography',
             severity: 'suggestion',
-            rect: { x: n.x / vw, y: n.y / vh, width: n.width / vw, height: n.height / vh },
+            rect: { x: tr.x / vw, y: tr.y / vh, width: tr.width / vw, height: tr.height / vh },
             node: n,
             domPath: n.domPath,
             actualText: `${n.fontSize}px`,

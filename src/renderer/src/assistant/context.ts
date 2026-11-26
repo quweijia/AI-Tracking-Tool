@@ -239,7 +239,7 @@ export async function formatMentionNotes(refs: AssistantRef[]): Promise<string> 
       }
     } else if (ref.type === 'report') {
       const r = await db.reportRecords.get(ref.id)
-      if (r) lines.push(`- 引用报告「${r.name}」（ID ${r.id}，${REPORT_TYPE_LABELS[r.type]}，问题数 ${r.total}）`)
+      if (r && !r.deletedAt) lines.push(`- 引用报告「${r.name}」（ID ${r.id}，${REPORT_TYPE_LABELS[r.type]}，问题数 ${r.total}）`)
     }
   }
   return lines.length ? `\n\n【用户@引用对象】\n${lines.join('\n')}` : ''

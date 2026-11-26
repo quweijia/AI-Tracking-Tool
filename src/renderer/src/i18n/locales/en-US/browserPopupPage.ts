@@ -20,5 +20,13 @@ export default {
   hintLoaded: 'Page loaded. Click "Generate issue annotations" to send results back to the main window',
   hintWaiting: 'Please wait for the page to load (log in first for intranet pages)',
   generating: 'Generating...',
-  generateAnnotations: 'Generate issue annotations'
+  generateAnnotations: 'Generate issue annotations',
+  loginTitle: 'Sign in · Built-in browser',
+  loginHint: 'Sign in above; once the "login success marker" is hit, the session is captured automatically and the walkthrough resumes',
+  loginMarker: 'Login success marker',
+  loginMarkerPlaceholder: 'Login success marker (optional): page text, url:keyword, css:selector',
+  loginSaving: 'Login success detected, saving session...',
+  loginSaved: 'Session saved. This window will close automatically',
+  loginSaveFail: 'Failed to save session: {{msg}}',
+  loginManual: 'I have finished signing in'
 }

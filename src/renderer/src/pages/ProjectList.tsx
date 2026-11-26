@@ -9,6 +9,13 @@ import heroBannerArtDarkUrl from '../assets/hero-banner-xm-dark.png'
 
 const PLATFORM_KEYS = Object.keys(PLATFORM_LABELS) as Platform[]
 
+/** 1×1 透明 GIF：拖拽排序时替换浏览器默认的卡片拖影（与 PageGrid 一致） */
+const TRANSPARENT_DRAG_IMG = (() => {
+  const img = new Image(1, 1)
+  img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+  return img
+})()
+
 /** 首页统计：口径与报告一致，排除未审核 AI 候选 */
 function useGlobalStats() {
   return useLiveQuery(async () => {
@@ -17,17 +24,19 @@ function useGlobalStats() {
       db.pages.toArray(),
       db.issues.toArray()
     ])
+    const liveProjects = projects.filter((p) => !p.deletedAt)
+    const livePages = pages.filter((p) => !p.deletedAt)
     const reportable = issues.filter((i) => !(i.isAISuggested && !i.aiConfirmed))
     const pending = reportable.filter((i) => i.status === 'pending')
     const resolved = reportable.filter((i) =>
       ['fixed', 'ignored', 'design-confirmed'].includes(i.status)
     )
     return {
-      projectCount: projects.length,
-      platformCount: new Set(projects.flatMap((p) => platformList(p.platform))).size,
+      projectCount: liveProjects.length,
+      platformCount: new Set(liveProjects.flatMap((p) => platformList(p.platform))).size,
       pendingCount: pending.length,
       resolvedTotal: resolved.length,
-      pageCount: pages.length
+      pageCount: livePages.length
     }
   }, [])
 }
@@ -76,8 +85,8 @@ function StatIcon({ kind }: { kind: 'projects' | 'pending' | 'resolved' | 'pages
 
 export default function ProjectList() {
   const { t } = useTranslation('projectList')
-  // 与侧边栏树排序保持一致：手动 sortNo 优先，未拖过的按创建时间
-  const projects = useLiveQuery(async () => (await db.projects.toArray()).sort(bySort), [])
+  // 与侧边栏树排序保持一致：手动 sortNo 优先，未拖过的按创建时间（回收站中的项目不展示）
+  const projects = useLiveQuery(async () => (await db.projects.toArray()).filter((p) => !p.deletedAt).sort(bySort), [])
   const stats = useGlobalStats()
   const [showNew, setShowNew] = useState(false)
   const [keyword, setKeyword] = useState('')
@@ -122,6 +131,7 @@ export default function ProjectList() {
           setDragId(id)
           e.dataTransfer.effectAllowed = 'move'
           e.dataTransfer.setData('text/plain', id)
+          e.dataTransfer.setDragImage(TRANSPARENT_DRAG_IMG, 0, 0)
         },
         onDragEnd: () => {
           setDragId(null)
@@ -226,10 +236,10 @@ export default function ProjectList() {
       </div>
 
       <div className="filter-row">
-        <div className="plat-tabs">
+        <div className="tabs">
           <button
             type="button"
-            className={`plat-tab ${platformFilter === 'all' ? 'active' : ''}`}
+            className={`tabs-item ${platformFilter === 'all' ? 'active' : ''}`}
             onClick={() => setPlatformFilter('all')}
           >
             {t('allPlatforms')}
@@ -238,7 +248,7 @@ export default function ProjectList() {
             <button
               key={k}
               type="button"
-              className={`plat-tab ${platformFilter === k ? 'active' : ''}`}
+              className={`tabs-item ${platformFilter === k ? 'active' : ''}`}
               onClick={() => setPlatformFilter(k)}
             >
               {t(`platform_${k}`)}
@@ -260,10 +270,10 @@ export default function ProjectList() {
               onChange={(e) => setKeyword(e.target.value)}
             />
           </div>
-          <div className="view-toggle">
+          <div className="tabs tabs--icon">
             <button
               type="button"
-              className={`view-btn ${viewMode === 'grid' ? 'active' : ''}`}
+              className={`tabs-item ${viewMode === 'grid' ? 'active' : ''}`}
               onClick={() => setViewMode('grid')}
               title={t('gridView')}
             >
@@ -276,7 +286,7 @@ export default function ProjectList() {
             </button>
             <button
               type="button"
-              className={`view-btn ${viewMode === 'list' ? 'active' : ''}`}
+              className={`tabs-item ${viewMode === 'list' ? 'active' : ''}`}
               onClick={() => setViewMode('list')}
               title={t('listView')}
             >

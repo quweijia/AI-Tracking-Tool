@@ -4,7 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { useTranslation } from 'react-i18next'
 import {
   db,
-  deleteProjectCascade,
+  softDeleteProjects,
   genId,
   Platform,
   PLATFORM_LABELS,
@@ -13,6 +13,8 @@ import {
   DesignSpec,
   type ProjectSpecBinding
 } from '../db'
+import { confirmDialog } from './ConfirmDialog'
+import { showToast } from './Toast'
 import { PlatformIcon } from './PlatformBadge'
 import { LOGO_COLORS, logoColorOf } from './ProjectCard'
 import LogoCropper from './LogoCropper'
@@ -26,6 +28,27 @@ interface Props {
 }
 
 const PLATFORM_KEYS = Object.keys(PLATFORM_LABELS) as Platform[]
+
+/** 设计规范菜单开关缓存：记录上次读取结果，弹窗再次打开时首帧即命中正确状态；null = 尚未读取过（不渲染绑定区块） */
+let specMenuOnCache: boolean | null = null
+
+/** 读取设计规范菜单开关并写入模块缓存 */
+const refreshSpecMenuCache = () =>
+  window.electronAPI
+    .getConfig()
+    .then((cfg) => {
+      specMenuOnCache = cfg.specMenuEnabled !== false
+    })
+    .catch(() => {
+      // 配置读取失败（如文件损坏）时按默认开启兜底，避免弹窗渲染门闸等一个永不就绪的结果
+      specMenuOnCache = true
+    })
+
+// 模块加载即预读开关并常驻监听变更：本模块被项目列表/新建走查/项目详情静态导入，应用启动即加载，
+// 预读在用户点开弹窗之前完成，开启/关闭两种状态下首帧都能渲染出正确高度，弹窗不再跳动；
+// 设置页切换开关时弹窗可能未挂载（组件内监听收不到），需在模块级同步缓存
+void refreshSpecMenuCache()
+window.addEventListener('spec-menu-change', refreshSpecMenuCache)
 
 /** 新建 / 编辑项目弹窗：名称、适用端类型（多选）、项目 Logo；删除项目入口收进编辑弹窗 */
 export default function ProjectModal({ project, onDone, onCancel }: Props) {
@@ -45,17 +68,26 @@ export default function ProjectModal({ project, onDone, onCancel }: Props) {
   const [cropping, setCropping] = useState<string | null>(null)
   /** 规范绑定：端分类 id → 规范套 id（'' = 不绑定） */
   const [bindByCategory, setBindByCategory] = useState<Record<string, string>>({})
+  /** 设计规范菜单开关（设置页「通用」控制）：null = 配置未就绪，首帧不渲染绑定区块，避免关闭状态下「先显示再消失」的闪烁 */
+  const [specMenuOn, setSpecMenuOn] = useState<boolean | null>(specMenuOnCache)
 
-  // 绑定选择器数据：端分类、规范套、编辑模式下的已有绑定
-  const categories = useLiveQuery(() => db.specCategories.toArray(), []) ?? []
-  const specs = useLiveQuery(() => db.designSpecs.toArray(), []) ?? []
-  const bindings = useLiveQuery(
+  // 绑定选择器数据：端分类、规范套、编辑模式下的已有绑定。
+  // 保留 useLiveQuery 原始 undefined 语义（undefined = Dexie 数据仍在加载）：若在这里 ?? [] 兜底，
+  // 首帧会把「加载中」误判为「无规范套」先渲染矮的空态框，数据到达后再换成高网格，弹窗高度会「弹一下」
+  const categoriesQ = useLiveQuery(() => db.specCategories.toArray(), [])
+  const specsQ = useLiveQuery(() => db.designSpecs.toArray(), [])
+  const bindingsQ = useLiveQuery(
     () =>
       project
         ? db.projectSpecBindings.where('projectId').equals(project.id).toArray()
         : Promise.resolve<ProjectSpecBinding[]>([]),
     [project?.id]
   )
+  const categories = categoriesQ ?? []
+  const specs = specsQ ?? []
+  const bindings = bindingsQ ?? []
+  // 弹窗渲染门闸：菜单开关配置 + 三份数据全部就绪才渲染，弹窗出现即最终高度
+  const dataReady = specMenuOn !== null && categoriesQ !== undefined && specsQ !== undefined && bindingsQ !== undefined
 
   // 编辑模式：读取已保存的 Logo 作为初始预览（否则弹窗里只显示文字占位）
   useEffect(() => {
@@ -81,6 +113,27 @@ export default function ProjectModal({ project, onDone, onCancel }: Props) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onCancel])
+
+  // 设计规范菜单开关联动：初次读取 config，设置页切换后经 spec-menu-change 事件即时同步（与侧边栏同一机制）
+  useEffect(() => {
+    const refresh = () => {
+      void window.electronAPI
+        .getConfig()
+        .then((cfg) => {
+          const on = cfg.specMenuEnabled !== false
+          specMenuOnCache = on
+          setSpecMenuOn(on)
+        })
+        .catch(() => {
+          // 配置读取失败时按默认开启兜底，保证弹窗不被「未就绪」门闸永久阻塞
+          specMenuOnCache = true
+          setSpecMenuOn(true)
+        })
+    }
+    refresh()
+    window.addEventListener('spec-menu-change', refresh)
+    return () => window.removeEventListener('spec-menu-change', refresh)
+  }, [])
 
   const togglePlatform = (k: Platform) => {
     setPlatforms((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]))
@@ -121,6 +174,11 @@ export default function ProjectModal({ project, onDone, onCancel }: Props) {
   const pickLogo = async () => {
     const result = await window.electronAPI.selectImage()
     if (!result) return
+    // GIF 动图跳过裁剪（canvas 裁剪输出静态 PNG 会丢动画），直接采用 selectImage 已落盘的原图
+    if (result.dataUrl.startsWith('data:image/gif')) {
+      setLogo(result)
+      return
+    }
     // 选择后先进入裁剪界面，确认后再采用（原图临时文件在裁剪结束/取消时清理）
     setPendingOriginal(result)
     setCropping(result.dataUrl)
@@ -149,18 +207,20 @@ export default function ProjectModal({ project, onDone, onCancel }: Props) {
   const duplicate = useLiveQuery(() => {
     const t = name.trim()
     if (!t) return undefined
-    return db.projects.filter((p) => p.name === t && p.id !== project?.id).first()
+    return db.projects.filter((p) => !p.deletedAt && p.name === t && p.id !== project?.id).first()
   }, [name, project?.id])
 
   const canSave = name.trim().length > 0 && platforms.length > 0 && !duplicate
 
-  /** 编辑模式：删除整个项目（级联清理），入口收进编辑弹窗 */
+  /** 编辑模式：删除整个项目（软删除进回收站，标注与文件保留，可在回收站还原）；删除后关闭弹窗并返回项目列表 */
   const handleDelete = async () => {
     if (!project) return
-    const ok = window.confirm(t('deleteConfirm', { name: project.name }))
+    const ok = await confirmDialog({ message: t('deleteConfirm', { name: project.name }), tone: 'danger' })
     if (!ok) return
-    await deleteProjectCascade(project.id)
+    await softDeleteProjects([project.id])
     onDone()
+    navigate('/')
+    showToast(t('common:movedToTrash'), { tone: 'info' })
   }
 
   const handleSave = async () => {
@@ -204,12 +264,15 @@ export default function ProjectModal({ project, onDone, onCancel }: Props) {
     onDone()
   }
 
+  // 数据未就绪：本帧不渲染弹窗，下一帧直接以最终高度出现（必须放在所有 hooks 之后，避免 hooks 数量变化）
+  if (!dataReady) return null
+
   const avatarSrc = logo?.dataUrl ?? ''
 
   return (
     <>
       <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
-      <div className="modal">
+      <div className="modal project-modal">
         <h3>{project ? t('editTitle') : t('createTitle')}</h3>
 
         <label className="field-label">{t('logoLabel')}</label>
@@ -286,33 +349,38 @@ export default function ProjectModal({ project, onDone, onCancel }: Props) {
           ))}
         </div>
 
-        <label className="field-label">{t('specBindLabel')}</label>
-        {specs.length === 0 ? (
-          <div className="spec-bind-empty">{t('specBindEmpty')}</div>
-        ) : (
-          <div className="spec-bind-grid">
-            {visibleCats.map((cat) => {
-              const bound = bindByCategory[cat.id] ?? ''
-              const opts = [
-                { value: '', label: t('specBindNone') },
-                ...(specsByCat[cat.id] ?? []).map((s) => ({ value: s.id, label: s.name }))
-              ]
-              return (
-                <div key={cat.id} className="spec-bind-row">
-                  <span className={`spec-bind-cat${bound ? ' bound' : ''}`}>
-                    <PlatformIcon platform={cat.platformKey} size={13} />
-                    {cat.name}
-                  </span>
-                  <USelect
-                    className={`spec-bind-select${bound ? ' is-bound' : ''}`}
-                    value={bound}
-                    onChange={(v) => setBind(cat.id, v)}
-                    options={opts}
-                  />
-                </div>
-              )
-            })}
-          </div>
+        {/* 设计规范菜单关闭（设置页「通用」）时隐藏整个绑定区块；已保存的绑定数据保留不受影响 */}
+        {specMenuOn && (
+          <>
+            <label className="field-label">{t('specBindLabel')}</label>
+            {specs.length === 0 ? (
+              <div className="spec-bind-empty">{t('specBindEmpty')}</div>
+            ) : (
+              <div className="spec-bind-grid">
+                {visibleCats.map((cat) => {
+                  const bound = bindByCategory[cat.id] ?? ''
+                  const opts = [
+                    { value: '', label: t('specBindNone') },
+                    ...(specsByCat[cat.id] ?? []).map((s) => ({ value: s.id, label: s.name }))
+                  ]
+                  return (
+                    <div key={cat.id} className="spec-bind-row">
+                      <span className={`spec-bind-cat${bound ? ' bound' : ''}`}>
+                        <PlatformIcon platform={cat.platformKey} size={13} />
+                        {cat.name}
+                      </span>
+                      <USelect
+                        className={`spec-bind-select${bound ? ' is-bound' : ''}`}
+                        value={bound}
+                        onChange={(v) => setBind(cat.id, v)}
+                        options={opts}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </>
         )}
 
         <div className="modal-actions">

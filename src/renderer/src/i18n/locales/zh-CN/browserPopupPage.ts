@@ -20,5 +20,17 @@ export default {
   hintLoaded: '页面加载完成，点击生成问题标注回传主窗口',
   hintWaiting: '请等待页面加载完成（内网页面请先登录）',
   generating: '生成中...',
-  generateAnnotations: '生成问题标注'
+  generateAnnotations: '生成问题标注',
+  loginTitle: '登录 · 内置浏览器',
+  loginHint: '请在上方页面完成登录；命中「登录成功标识」后将自动抓取会话并继续自动走查',
+  loginMarker: '登录成功标识',
+  loginMarkerPlaceholder: '登录成功标识（可留空）：页面文本、url:关键词、css:选择器',
+  loginSaving: '已检测到登录成功，正在保存会话...',
+  loginSaved: '会话已保存，窗口将自动关闭',
+  loginSaveFail: '会话保存失败：{{msg}}',
+  loginManual: '我已完成登录',
+  captureHint: '页面加载完成，选择截图方式采集',
+  captureFullPage: '捕捉整个页面',
+  captureVisible: '捕捉可见部分',
+  captureRegion: '捕捉选定区域'
 }

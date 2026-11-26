@@ -65,7 +65,7 @@ export default function ReverifyModal({ issue, oldScreenshotUrl, onClose }: Prop
       <div className="modal modal-wide">
         <h3>{t('title')}</h3>
         <div className="reverify-issue-meta">
-          <span className={`severity-badge severity-${issue.severity}`}>
+          <span className={`badge ${issue.severity === 'major' ? 'badge-danger' : issue.severity === 'minor' ? 'badge-warning' : 'badge-neutral'}`}>
             {t(`severity_${issue.severity}`)}
           </span>
           <span className="meta-cat">{t(`category_${issue.category}`)}</span>

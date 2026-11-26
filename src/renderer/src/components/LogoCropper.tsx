@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { useTranslation } from 'react-i18next'
+import { showToast } from './Toast'
 
 interface Props {
   /** 原图 data URL */
@@ -94,7 +95,7 @@ export default function LogoCropper({ src, onCancel, onDone }: Props) {
       await onDone(relativePath, dataUrl)
     } catch (err) {
       console.error('Logo 裁剪保存失败', err)
-      window.alert(t('alertSaveFailed'))
+      showToast(t('alertSaveFailed'), { tone: 'danger' })
     } finally {
       setSaving(false)
     }

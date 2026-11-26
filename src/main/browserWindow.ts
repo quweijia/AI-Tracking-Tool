@@ -10,31 +10,50 @@ import { pathToFileURL } from 'url'
  *   「生成问题标注」发起采集，结果经主进程转发回主窗口（流程发起方为弹窗本身）
  */
 let popup: BrowserWindow | null = null
+/** 当前弹窗模式：login / capture / 空（普通） */
+let popupMode: 'login' | 'capture' | '' = ''
 
-function popupPageUrl(url?: string): string {
+function popupPageUrl(url?: string, mode?: 'login' | 'capture', purpose?: 'newPage' | 'replaceImage'): string {
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   const base = devUrl ? `${devUrl}/#/browser` : `file://${join(__dirname, '../renderer/index.html')}#/browser`
-  return url ? `${base}?url=${encodeURIComponent(url)}` : base
+  const params: string[] = []
+  if (url) params.push(`url=${encodeURIComponent(url)}`)
+  if (mode) params.push(`mode=${mode}`)
+  if (purpose) params.push(`purpose=${purpose}`)
+  return params.length ? `${base}?${params.join('&')}` : base
 }
 
-/** 打开/聚焦开发浏览器弹窗；带 url 时导航（含已有窗口） */
-export function openDevBrowserPopup(url?: string): { ok: boolean; message: string } {
+/** 打开/聚焦开发浏览器弹窗；带 url 时导航（含已有窗口）。各模式互斥切换 */
+export function openDevBrowserPopup(url?: string, opts?: { loginMode?: boolean; captureMode?: boolean; capturePurpose?: 'newPage' | 'replaceImage' }): { ok: boolean; message: string } {
   const target = url?.trim()
+  let mode: 'login' | 'capture' | '' = ''
+  if (opts?.loginMode) mode = 'login'
+  else if (opts?.captureMode) mode = 'capture'
+  const purpose = mode === 'capture' ? (opts?.capturePurpose || 'newPage') : undefined
   if (target && !/^https?:\/\//i.test(target) && !/^file:\/\//i.test(target)) {
     return { ok: false, message: 'URL 需以 http://、https:// 或 file:// 开头' }
   }
   if (popup && !popup.isDestroyed()) {
-    popup.show()
-    popup.focus()
-    if (target) popup.webContents.send('browser:navigate', target)
-    return { ok: true, message: '已聚焦开发浏览器窗口' }
+    // 采集模式：总是重建窗口，确保 mode=capture 参数正确传递
+    // 其他模式：不同模式时重建，同模式时复用
+    if (mode === 'capture' || popupMode !== mode) {
+      popup.destroy()
+      popup = null
+      popupMode = ''
+    } else {
+      popup.show()
+      popup.focus()
+      if (target) popup.webContents.send('browser:navigate', target)
+      return { ok: true, message: '已聚焦开发浏览器窗口' }
+    }
   }
+  const title = mode === 'login' ? '登录 · 内置浏览器' : mode === 'capture' ? '采集 · 内置浏览器' : '内置浏览器'
   popup = new BrowserWindow({
     width: 1240,
     height: 860,
     minWidth: 420,
     minHeight: 360,
-    title: '内置浏览器',
+    title,
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
@@ -43,17 +62,28 @@ export function openDevBrowserPopup(url?: string): { ok: boolean; message: strin
       preload: join(__dirname, '../preload/index.js')
     }
   })
+  popupMode = mode
   popup.on('closed', () => {
+    const wasLogin = popupMode === 'login'
+    popupMode = ''
     popup = null
+    if (wasLogin) void import('./walkSession').then(({ forwardLoginResult }) => forwardLoginResult('closed'))
   })
-  // 弹窗内新窗口请求（报告里的 target=_blank / window.open）统一拦截：
-  // 转回内置浏览器导航（复用同一弹窗），不创建新窗口、不经系统浏览器打开
-  popup.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url) || /^file:\/\//i.test(url)) openDevBrowserPopup(url)
+  popup.webContents.setWindowOpenHandler(({ url: openUrl }) => {
+    // 采集模式：guest 页面任何 window.open（target=_blank 链接/脚本弹窗）一律纯 deny——
+    // 递归 openDevBrowserPopup 会命中「capture 模式总是重建」逻辑销毁当前采集弹窗，
+    // 页面被整体重置（采集前功尽弃/采集中断）；其他模式维持「转发新开弹窗」行为
+    if (mode === 'capture') return { action: 'deny' }
+    if (/^https?:\/\//i.test(openUrl) || /^file:\/\//i.test(openUrl)) openDevBrowserPopup(openUrl, { loginMode: mode === 'login' })
     return { action: 'deny' }
   })
-  void popup.loadURL(popupPageUrl(target || undefined))
+  void popup.loadURL(popupPageUrl(target, mode || undefined, purpose))
   return { ok: true, message: '已打开开发浏览器窗口' }
+}
+
+/** 关闭内置浏览器弹窗（自动走查登录等待超时/取消时调用） */
+export function closeDevBrowserPopup(): void {
+  if (popup && !popup.isDestroyed()) popup.close()
 }
 
 /** 自动走查视口（autoWidth=true 表示宽度来自 Figma 画板尺寸，弹窗内只读展示） */
@@ -76,6 +106,29 @@ function sendPopupViewport(vp: DevViewport): void {
 function forwardWalkResult(data: unknown): void {
   const main = BrowserWindow.getAllWindows().find((w) => w !== popup && !w.isDestroyed())
   main?.webContents.send('browser:walk-captured', data)
+}
+
+/** 产品标注采集：记录发起 openBrowserWindow 的主窗口（结果回传目标），避免窗口枚举误命中 overlay/选择器等辅助窗口 */
+let captureOpener: BrowserWindow | null = null
+
+/** 产品标注采集结果转发：显式 opener 优先，兜底窗口枚举排除法；失败与转发均有日志便于诊断 */
+function forwardCaptureResult(channel: string, data: unknown): void {
+  const size =
+    data && typeof data === 'object' && 'dataUrl' in (data as Record<string, unknown>)
+      ? String((data as { dataUrl?: unknown }).dataUrl ?? '').length
+      : -1
+  const target =
+    captureOpener && !captureOpener.isDestroyed()
+      ? captureOpener
+      : BrowserWindow.getAllWindows().find(
+          (w) => w !== popup && !w.isDestroyed() && !w.getTitle().includes('选择截图屏幕')
+        )
+  if (!target) {
+    console.warn('[BROWSER] 采集结果无回传目标（发起窗口已关闭）:', channel)
+    return
+  }
+  console.log('[BROWSER] 转发采集结果:', channel, '→ 目标窗口:', target.getTitle(), 'dataUrl 长度:', size)
+  target.webContents.send(channel, data)
 }
 
 /** 递归统计目录体积（字节），目录不存在或不可读返回 0 */
@@ -101,13 +154,23 @@ function fmtSize(bytes: number): string {
 
 /** 注册浏览器弹窗相关 IPC */
 export function registerBrowserHandlers(): void {
-  ipcMain.handle('browser:openWindow', (_e, url?: string) => openDevBrowserPopup(url))
+  ipcMain.handle('browser:openWindow', (e, url?: string, opts?: { loginMode?: boolean; captureMode?: boolean; capturePurpose?: 'newPage' | 'replaceImage' }) => {
+    // 记录发起方（主窗口）：产品标注采集结果经弹窗回传时定位目标
+    captureOpener = BrowserWindow.fromWebContents(e.sender)
+    return openDevBrowserPopup(url, opts)
+  })
+  // 主窗口：登录等待超时/取消 → 关闭登录模式弹窗
+  ipcMain.handle('browser:closeWindow', () => closeDevBrowserPopup())
   // 主窗口：下发自动走查视口
   ipcMain.on('browser:setViewport', (_e, vp: DevViewport) => sendPopupViewport(vp))
   // 弹窗页：挂载时拉取已下发的视口（规避「先发送后加载」竞态）
   ipcMain.handle('browser:popupGetViewport', () => lastViewport)
   // 弹窗页：回传采集结果 → 转发主窗口
   ipcMain.on('browser:walk-result', (_e, data: unknown) => forwardWalkResult(data))
+  // 弹窗页：产品标注 URL 采集结果 → 转发发起方主窗口
+  ipcMain.on('browser:new-page-result', (_e, data: unknown) => forwardCaptureResult('browser:new-page-result', data))
+  // 弹窗页：产品标注画布 URL 采集（替换图片）结果 → 转发发起方主窗口
+  ipcMain.on('browser:url-capture-result', (_e, data: unknown) => forwardCaptureResult('browser:url-capture-result', data))
   // 设置页：清除内置浏览器（persist:walkthrough 分区）保存的浏览数据
   ipcMain.handle('browser:clearData', async (): Promise<{ ok: boolean; message: string }> => {
     try {

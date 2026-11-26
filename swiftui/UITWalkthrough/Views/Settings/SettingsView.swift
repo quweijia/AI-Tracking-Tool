@@ -38,7 +38,7 @@ private struct GeneralSection: View {
                     .foregroundStyle(Color.textSecondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, Spacing.xxs)
+            .padding(.vertical, Spacing.xs)
         }
         .onAppear {
             soundEnabled = AppConfigStore.load().soundEnabled != false
@@ -59,7 +59,7 @@ private struct AppAuthSection: View {
                 KingsoftAuthCard()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, Spacing.xxs)
+            .padding(.vertical, Spacing.xs)
         }
     }
 }
@@ -371,7 +371,7 @@ private struct ModelsSection: View {
     var body: some View {
         AppCard {
             VStack(alignment: .leading, spacing: Spacing.mg) {
-                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                VStack(alignment: .leading, spacing: Spacing.xs) {
                     HStack {
                         Text("模型列表")
                             .font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold))
@@ -402,7 +402,7 @@ private struct ModelsSection: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, Spacing.xxs)
+            .padding(.vertical, Spacing.xs)
         }
         .onAppear {
             let cfg = AppConfigStore.load()
@@ -437,7 +437,7 @@ private struct ModelsSection: View {
 
     private func modelRow(_ m: AIModelConfig) -> some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
-            HStack(spacing: Spacing.xxs) {
+            HStack(spacing: Spacing.xs) {
                 Text(m.name)
                     .font(.system(size: FontTokens.Size.bodySmall))
                     .fontWeight(.medium)
@@ -497,7 +497,7 @@ private struct ModelsSection: View {
             .font(.system(size: FontTokens.Size.caption))
             .foregroundStyle(foreground)
             .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
             .background(Capsule().fill(background))
     }
 }
@@ -549,7 +549,7 @@ private struct ModelModal: View {
                         Text(p.label)
                             .font(.system(size: FontTokens.Size.captionSmall))
                             .padding(.horizontal, Spacing.mg)
-                            .padding(.vertical, Spacing.xxs)
+                            .padding(.vertical, Spacing.xs)
                             .foregroundStyle(preset == p.key ? Color.primary : Color.textSecondary)
                             .background(
                                 Capsule().fill(preset == p.key ? Color.primarySoft : Color.cardBg)
@@ -571,12 +571,12 @@ private struct ModelModal: View {
                 .appInputStyle()
 
             HStack(alignment: .top, spacing: Spacing.xlg) {
-                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                VStack(alignment: .leading, spacing: Spacing.xs) {
                     AppFieldLabel(text: "模型 ID")
                     TextField("如：gpt-4o", text: $model)
                         .appInputStyle()
                 }
-                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                VStack(alignment: .leading, spacing: Spacing.xs) {
                     AppFieldLabel(text: "API Key")
                     SecureField("sk-...", text: $apiKey)
                         .appInputStyle()

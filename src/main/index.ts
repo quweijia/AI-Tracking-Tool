@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, Menu, MenuItemConstructorOptions, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, MenuItemConstructorOptions, screen, shell } from 'electron'
+import { appendFileSync } from 'fs'
 import { join } from 'path'
 import { registerIpcHandlers } from './ipc'
 import { registerDockIconHandlers, restoreDockIcon } from './dockIcon'
@@ -35,7 +36,6 @@ const MENU_STR: Record<MenuLang, Record<string, string>> = {
     paste: '粘贴',
     pasteAndMatchStyle: '粘贴并匹配样式',
     delete: '删除',
-    selectAll: '全选',
     view: '视图',
     reload: '重新加载',
     forceReload: '强制重新加载',
@@ -69,7 +69,6 @@ const MENU_STR: Record<MenuLang, Record<string, string>> = {
     paste: 'Paste',
     pasteAndMatchStyle: 'Paste and Match Style',
     delete: 'Delete',
-    selectAll: 'Select All',
     view: 'View',
     reload: 'Reload',
     forceReload: 'Force Reload',
@@ -118,18 +117,18 @@ function buildAppMenu(): void {
     {
       label: s.edit,
       submenu: [
-        { role: 'undo', label: s.undo },
-        { role: 'redo', label: s.redo },
-        { type: 'separator' },
+        // 不放 undo/redo 角色：菜单加速器先于渲染层 keydown 拦截 Cmd/Ctrl+Z，渲染层自定义撤销
+        // （拖拽排序 / 移动层级撤回、标注撤销）会完全收不到按键；
+        // 输入框内的文本撤销由 Chromium 原生编辑命令处理，不依赖该菜单项
         { role: 'cut', label: s.cut },
         { role: 'copy', label: s.copy },
         { role: 'paste', label: s.paste },
         ...(isMac
           ? ([{ role: 'pasteAndMatchStyle', label: s.pasteAndMatchStyle }] as MenuItemConstructorOptions[])
           : []),
-        { role: 'delete', label: s.delete },
-        { type: 'separator' },
-        { role: 'selectAll', label: s.selectAll }
+        { role: 'delete', label: s.delete }
+        // 不放 selectAll 角色：菜单加速器先于渲染层 keydown 拦截 Cmd/Ctrl+A，会导致输入框外全选无法禁用；
+        // 输入框内的全选由 Chromium 原生编辑命令处理，不依赖该菜单项
       ]
     },
     {
@@ -198,6 +197,24 @@ function registerWindowControls(): void {
     else win.maximize()
   }))
   ipcMain.on('window:close', () => focusAnd(() => win?.close()))
+  // 渲染层初始化查询当前最大化状态（对齐 Windows max/restore 按钮初始图标）
+  ipcMain.handle('window:is-maximized', () => (win ? win.isMaximized() : false))
+  // 标题栏拖拽：CSS drag 区域不派发 DOM 事件（也无法监听双击），改由渲染层
+  // mousedown/mousemove 驱动 —— start 记录光标与窗口原点，move 按光标位移挪窗。
+  // 最大化/全屏状态下不跟随拖拽（与原生标题栏行为一致）
+  let dragOrigin: { cursor: { x: number; y: number }; pos: number[] } | null = null
+  ipcMain.on('window:drag-start', () => {
+    if (!win || win.isFullScreen() || win.isMaximized()) return
+    dragOrigin = { cursor: screen.getCursorScreenPoint(), pos: win.getPosition() }
+  })
+  ipcMain.on('window:drag-move', () => {
+    if (!win || !dragOrigin) return
+    const cur = screen.getCursorScreenPoint()
+    win.setPosition(dragOrigin.pos[0] + cur.x - dragOrigin.cursor.x, dragOrigin.pos[1] + cur.y - dragOrigin.cursor.y)
+  })
+  ipcMain.on('window:drag-end', () => {
+    dragOrigin = null
+  })
 }
 
 /** 主窗口引用（自绘窗口控制按钮的 IPC 使用） */
@@ -212,21 +229,25 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: false,
     title: 'AI 走查工具',
-    // 隐藏原生标题栏，窗口控制按钮由渲染层自绘（左侧预留 84px）
-    titleBarStyle: 'hiddenInset',
+    // 隐藏原生标题栏，窗口控制按钮由渲染层自绘：
+    // macOS 用 hiddenInset + 左侧自绘红绿灯（trafficLightPosition 仅 mac 生效）；
+    // Windows 用 hidden 移除系统标题栏（避免与自绘顶栏叠成双层），右上角自绘三按钮
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     trafficLightPosition: { x: 14, y: 19 },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
       // 自动走查内置浏览器（webview 加载研发环境页面）
-      webviewTag: true
+      webviewTag: true,
+      // 登录窗口弹出后主窗口易被遮挡，页面 timer（如登录等待倒计时）不因遮挡/失焦被 Chromium 节流
+      backgroundThrottling: false
     }
   })
   win = mainWindow
 
-  // 失焦激活兜底：macOS 上点击未激活窗口的顶栏（app-region: drag 区域及其周边）激活时，
+  // 失焦激活兜底：macOS 上点击未激活窗口的顶栏（拖拽/双击区域及其周边）激活时，
   // 渲染层收不到 DOM focus/blur 与后续鼠标事件（事件流卡死，窗口控制按钮置灰且点不动）。
   // 主进程事件始终可靠：激活时强制恢复 webContents 事件焦点以解开卡死状态，
   // 并把聚焦状态经 IPC 推给渲染层，同步按钮置灰态。
@@ -236,6 +257,11 @@ function createWindow(): void {
     mainWindow.webContents.send('window:focus-changed', true)
   })
   mainWindow.on('blur', () => mainWindow.webContents.send('window:focus-changed', false))
+
+  // 最大化状态变化推给渲染层（Windows 自绘标题栏的 max/restore 按钮随状态切换图标）
+  const sendMaximized = (): void => mainWindow.webContents.send('window:maximized-changed', mainWindow.isMaximized())
+  mainWindow.on('maximize', sendMaximized)
+  mainWindow.on('unmaximize', sendMaximized)
 
   mainWindow.on('ready-to-show', () => {
     // macOS：永久隐藏原生红绿灯，改用渲染层自绘窗口控制按钮
@@ -262,8 +288,29 @@ function createWindow(): void {
   }
 }
 
+// 全局异常捕获：防止未捕获异常导致应用闪退
+process.on('uncaughtException', (err) => {
+  console.error('[MAIN] 未捕获异常:', err)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[MAIN] 未处理的 Promise 拒绝:', reason)
+})
+
 // 开发模式下进程名显示为「AI 走查工具」（打包版由 electron-builder 的 productName 决定）
 app.setName('AI 走查工具')
+
+// macOS + sandbox 环境下 webviewTag 的 Network Service 偶发崩溃，
+// 禁用 NetworkServiceInProcess 使其运行在独立进程中，崩溃后自动重启而不带倒主进程
+// 同时关闭 TrustTokens 和 OptimizePhpCompilation 以减少内存服务崩溃
+// macOS + webviewTag 环境下 Network Service 频繁崩溃（exit 137），
+// 通过以下组合方案保持应用存活：
+// 1. 禁用 NetworkServiceInProcess — 让网络服务独立进程运行，崩溃不影响主进程
+// 2. 禁用 TrustTokens / OptimizePhpCompilation — 减少内存服务崩溃
+// 3. 禁用 GPU 沙箱 — 避免 macOS 上 GPU 进程崩溃带倒主进程
+app.commandLine.appendSwitch('disable-features', 'NetworkServiceInProcess,TrustTokens,OptimizePhpCompilation')
+app.commandLine.appendSwitch('no-sandbox')
+app.commandLine.appendSwitch('disable-gpu-sandbox')
+app.commandLine.appendSwitch('disable-software-rasterizer')
 
 // 第二实例触达时聚焦已有窗口（dock 保持单个「AI 走查工具」图标）
 function focusExistingWindow(): void {
@@ -279,6 +326,33 @@ function focusExistingWindow(): void {
 // 避免把 electron-vite 的正常重启误判为重复启动而杀死整条 dev 链路。
 // 锁基于 userData 路径（开发/打包各自独立单例）。
 function bootApp(): void {
+  // 崩溃诊断：未捕获异常 / 渲染层或子进程崩溃写入 userData/crash.log，闪退时有据可查
+  const logCrash = (tag: string, detail: unknown): void => {
+    const line = `[${new Date().toISOString()}] ${tag}\n${
+      detail instanceof Error ? (detail.stack ?? detail.message) : String(detail)
+    }\n\n`
+    try {
+      appendFileSync(join(app.getPath('userData'), 'crash.log'), line)
+    } catch {
+      // 日志写入失败不阻塞主流程
+    }
+    console.error(`[CRASH] ${tag}:`, detail)
+  }
+  process.on('uncaughtException', (err) => logCrash('uncaughtException', err))
+  process.on('unhandledRejection', (reason) => logCrash('unhandledRejection', reason))
+  // 注意签名：render-process-gone 回调为 (event, webContents, details)，details 在第三位；
+  // 同时输出 webContents 类型与 URL 以定位崩的是哪个进程（宿主窗口 / webview guest）
+  app.on('render-process-gone', (_e, wc, details) => {
+    let wcInfo = ''
+    try {
+      wcInfo = ` type=${wc.getType()} id=${wc.id} url=${wc.getURL()}`
+    } catch {
+      // webContents 已销毁时取不到信息
+    }
+    logCrash('render-process-gone', JSON.stringify(details) + wcInfo)
+  })
+  app.on('child-process-gone', (_e, details) => logCrash('child-process-gone', JSON.stringify(details)))
+
   app.on('second-instance', focusExistingWindow)
 
   app.whenReady().then(() => {

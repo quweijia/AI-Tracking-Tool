@@ -51,7 +51,7 @@ struct PlatformBadgeView: View {
         Text(platform.label)
             .font(.system(size: FontTokens.Size.captionSmall, weight: .medium))
             .padding(.horizontal, Spacing.md)
-            .padding(.vertical, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
             .background(badgeBg, in: Capsule())
             .foregroundStyle(badgeColor)
     }
@@ -81,7 +81,7 @@ struct PageStatusBadgeView: View {
         Text(status.label)
             .font(.system(size: FontTokens.Size.captionSmall, weight: .medium))
             .padding(.horizontal, Spacing.md)
-            .padding(.vertical, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
             .background(bgColor, in: Capsule())
             .foregroundStyle(textColor)
     }

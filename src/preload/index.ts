@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { StyleNode, ToleranceConfig, MatchPair, StyleDiff, SpecSyncResult, LayeredRunSummary } from '../shared/types'
+import type { StyleNode, ToleranceConfig, MatchPair, StyleDiff, SpecSyncResult, LayeredRunSummary, WalkSessionProfile } from '../shared/types'
 
 const api = {
   saveImage: (buffer: ArrayBuffer, ext: string): Promise<string> =>
@@ -10,6 +10,19 @@ const api = {
     ipcRenderer.invoke('file:readImage', relativePath),
   deleteImage: (relativePath: string): Promise<boolean> =>
     ipcRenderer.invoke('file:deleteImage', relativePath),
+  // 撤回删除：把回收站里的图片按原路径移回（Cmd+Z 撤回批量删除用），返回成功恢复数
+  restoreImages: (relativePaths: string[]): Promise<number> =>
+    ipcRenderer.invoke('file:restoreImages', relativePaths),
+  // 同步原生窗口主题源（light/dark）：避免系统深色 + 应用浅色时原生窗口外围出现深色描边
+  setThemeSource: (source: 'system' | 'light' | 'dark'): Promise<boolean> =>
+    ipcRenderer.invoke('theme:setSource', source),
+  // 回收站彻底删除：物理删除数据图片并连带清理 image_trash 内同路径历史文件，返回清理文件数
+  purgeImages: (relativePaths: string[]): Promise<number> =>
+    ipcRenderer.invoke('file:purgeImages', relativePaths),
+  // 回收站磁盘治理：孤儿文件回收（referenced=全部存活记录引用路径白名单，含软删记录；
+  // pageIds=全部页面 id 白名单），返回清理文件/目录数
+  purgeOrphanFiles: (referenced: string[], pageIds: string[]): Promise<number> =>
+    ipcRenderer.invoke('trash:purgeOrphanFiles', referenced, pageIds),
   selectImage: (): Promise<{ relativePath: string; dataUrl: string } | null> =>
     ipcRenderer.invoke('file:selectImage'),
   exportReport: (
@@ -54,6 +67,29 @@ const api = {
   }> => ipcRenderer.invoke('skills:importZip'),
   openDevBrowser: (url: string): Promise<{ ok: boolean; message: string }> =>
     ipcRenderer.invoke('browser:openWindow', url),
+  // 自动走查登录流程：唤起登录模式内置浏览器窗口（检测到登录页时）
+  openLoginWindow: (url: string): Promise<{ ok: boolean; message: string }> =>
+    ipcRenderer.invoke('browser:openWindow', url, { loginMode: true }),
+  // 登录等待超时/用户取消 → 关闭登录窗口
+  closeLoginWindow: (): Promise<void> => ipcRenderer.invoke('browser:closeWindow'),
+  // 登录窗口回传结果 → 主窗口监听（success=登录成功已保存会话，closed=窗口被手动关闭）
+  walkOnLoginResult: (cb: (type: 'success' | 'closed') => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, type: 'success' | 'closed'): void => cb(type)
+    ipcRenderer.on('walk:login-result', listener)
+    return () => ipcRenderer.removeListener('walk:login-result', listener)
+  },
+  // 会话 profile：读取（解密）指定 URL 域名的登录态快照
+  walkSessionLoad: (url: string): Promise<{ found: boolean; profile?: WalkSessionProfile }> =>
+    ipcRenderer.invoke('walkSession:load', url),
+  // 会话 profile：登录窗口抓取的上下文 + 主进程补齐 Cookie → safeStorage 加密落盘
+  walkSessionSave: (payload: { url: string; marker?: string; ls?: Record<string, string>; ss?: Record<string, string>; idb?: unknown[] }): Promise<{ ok: boolean; message: string }> =>
+    ipcRenderer.invoke('walkSession:save', payload),
+  // 会话 profile：Cookie 注入 walkthrough 分区（同域名走查优先加载 profile）
+  walkSessionInjectCookies: (profile: WalkSessionProfile): Promise<{ ok: boolean; count: number }> =>
+    ipcRenderer.invoke('walkSession:injectCookies', profile),
+  // 会话 profile：CDP 注册「文档创建前」的 localStorage/sessionStorage/indexedDB 恢复脚本
+  walkSessionInitStorage: (webContentsId: number, profile: WalkSessionProfile): Promise<{ ok: boolean; message?: string }> =>
+    ipcRenderer.invoke('walkSession:initStorage', webContentsId, profile),
   // 分析报告：用系统浏览器打开本地导出的 HTML 报告文件
   openReportSystem: (filePath: string): Promise<{ ok: boolean; message: string }> =>
     ipcRenderer.invoke('report:openSystem', filePath),
@@ -96,6 +132,8 @@ const api = {
     collected: number
     skipped: number
   }): void => ipcRenderer.send('browser:walk-result', data),
+  /** 弹窗页（登录模式）：会话 profile 已保存 → 通知主窗口恢复自动走查 */
+  popupSendLoginResult: (): void => ipcRenderer.send('browser:login-result', 'success'),
   /** 主窗口：接收弹窗回传的采集结果（返回取消订阅） */
   walkOnResult: (
     handler: (data: {
@@ -152,6 +190,10 @@ const api = {
       severity: 'major' | 'minor' | 'suggestion'
       category: 'spacing' | 'typography' | 'color' | 'style' | 'interaction' | 'compatibility'
       suggestion?: { current: string; fix: string; properties?: string }
+      /** 问题分级（模型显式返回才携带）：required=正式缺陷；optional=备选参考 */
+      level?: 'required' | 'optional'
+      /** 分级判定理由（level=optional 时携带） */
+      levelReason?: string
     }[]
     message: string
   }> => ipcRenderer.invoke('ai:annotate', input),
@@ -208,16 +250,47 @@ const api = {
   kingsoftTest: (): Promise<{ ok: boolean; message: string }> => ipcRenderer.invoke('kingsoft:test'),
   kingsoftCreateReport: (payload: { title: string }): Promise<{ ok: boolean; url?: string; message: string }> =>
     ipcRenderer.invoke('kingsoft:createReport', payload),
+  // ───────────── 工作区设置（应用数据存放位置：磁盘占用 / 压缩包备份 / 恢复导入） ─────────────
+  /** 更改工作区文件夹：主进程迁移现有数据并立即生效 */
+  workspacePick: (): Promise<{ ok: boolean; canceled?: boolean; path?: string; message?: string }> =>
+    ipcRenderer.invoke('workspace:pick'),
+  /** 数据目录磁盘占用统计（递归累加文件大小） */
+  workspaceUsage: (): Promise<{ ok: boolean; bytes: number; dir: string; message?: string }> =>
+    ipcRenderer.invoke('workspace:usage'),
+  /** 备份压缩包：渲染层打包全表 JSON 串传入，主进程弹框选保存文件夹并 zip 打包 */
+  workspaceBackup: (dbJson: string): Promise<{ ok: boolean; canceled?: boolean; time?: number; path?: string; message: string }> =>
+    ipcRenderer.invoke('workspace:backup', dbJson),
+  /** 从备份压缩包恢复：返回全表数据与合并后配置（资产与配置文件已由主进程处理） */
+  workspaceRestore: (): Promise<{
+    ok: boolean
+    db?: { version?: number; time?: number; tables?: Record<string, unknown[]> }
+    config?: Record<string, unknown>
+    message: string
+  }> => ipcRenderer.invoke('workspace:restore'),
   // 窗口控制（自绘红绿灯，替代原生红绿灯）
   minimizeWindow: (): void => ipcRenderer.send('window:minimize'),
   maximizeWindow: (): void => ipcRenderer.send('window:maximize'),
   closeWindow: (): void => ipcRenderer.send('window:close'),
+  /** 标题栏拖拽：渲染层 mousedown 启动、mousemove 持续挪窗、mouseup 结束（主进程按光标位移 setPosition） */
+  dragWindowStart: (): void => ipcRenderer.send('window:drag-start'),
+  dragWindowMove: (): void => ipcRenderer.send('window:drag-move'),
+  dragWindowEnd: (): void => ipcRenderer.send('window:drag-end'),
   /** 主窗口：订阅窗口聚焦状态（主进程 focus/blur 转发；激活点击被吞时 DOM focus/blur 不可靠） */
   onWindowFocusChanged: (cb: (focused: boolean) => void): (() => void) => {
     const listener = (_e: Electron.IpcRendererEvent, focused: boolean): void => cb(focused)
     ipcRenderer.on('window:focus-changed', listener)
     return () => ipcRenderer.removeListener('window:focus-changed', listener)
   },
+  /** 主窗口：订阅最大化状态变化（Windows 自绘标题栏 max/restore 按钮切换图标） */
+  onWindowMaximizedChanged: (cb: (maximized: boolean) => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, maximized: boolean): void => cb(maximized)
+    ipcRenderer.on('window:maximized-changed', listener)
+    return () => ipcRenderer.removeListener('window:maximized-changed', listener)
+  },
+  /** 主窗口：查询当前是否最大化（自绘按钮初始态对齐） */
+  getWindowMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:is-maximized'),
+  /** 当前操作系统平台（渲染层按平台切换窗口控制按钮样式：darwin 红绿灯 / win32 三按钮） */
+  platform: process.platform,
   // 自动走查：Figma REST 只读读取（图层样式树 + Frame 截图）
   figmaFetchDesign: (input: {
     pat: string
@@ -328,7 +401,65 @@ const api = {
   },
   /** 提示词优化：把输入框草稿交给模型改写为更清晰的提问（非流式，一次性返回） */
   aiAssistantOptimize: (input: { modelId: string; draft: string }): Promise<{ ok: boolean; text?: string; message: string }> =>
-    ipcRenderer.invoke('ai:assistant:optimize', input)
+    ipcRenderer.invoke('ai:assistant:optimize', input),
+  // ===== 标注截图附件（详情弹窗专用） =====
+  /** 系统对话框多选本地图片，返回文件名 + data URL（落盘统一走 saveAttachment） */
+  pickLocalAttachments: (): Promise<{ fileName: string; ext: string; size: number; dataUrl: string }[]> =>
+    ipcRenderer.invoke('attachment:pickLocal'),
+  /** 附件原图落盘 walkthrough-data/attachments/<pageId>/，返回相对路径与字节数 */
+  saveAttachment: (dataUrl: string, pageId: string): Promise<{ relPath: string; size: number }> =>
+    ipcRenderer.invoke('attachment:save', dataUrl, pageId),
+  /** 批量删除附件原图（仅允许 attachments/ 目录内路径），返回成功删除数 */
+  deleteAttachments: (relPaths: string[]): Promise<number> =>
+    ipcRenderer.invoke('attachment:deleteMany', relPaths),
+  /** 读取剪贴板图片（主进程兜底通道），无图片返回 null */
+  readClipboardImage: (): Promise<string | null> =>
+    ipcRenderer.invoke('attachment:readClipboardImage'),
+  // ===== 标注截图（详情弹窗「截图」按钮 + 全屏选区 overlay） =====
+  /** 冻结屏幕 → overlay 框选 → 返回选区原图 data URL；失败时带原因（permission/cancelled/error/busy） */
+  captureRegion: (): Promise<{ ok: true; dataUrl: string } | { ok: false; reason: 'permission' | 'cancelled' | 'error' | 'busy' }> =>
+    ipcRenderer.invoke('attachment:captureRegion'),
+  /** overlay 初始化：返回冻结帧压缩预览 + overlay 逻辑尺寸（仅 overlay 窗口自身可调用，非 overlay 返回 null） */
+  captureOverlayInit: (): Promise<{ bgDataUrl: string; width: number; height: number } | null> =>
+    ipcRenderer.invoke('capture-overlay:init'),
+  /** overlay 背景就绪：通知主进程显示窗口（消除白屏闪烁） */
+  captureOverlayShown: (): void => ipcRenderer.send('capture-overlay:shown'),
+  /** overlay 选区确认：上报选区矩形（CSS 像素） */
+  captureOverlaySelect: (rect: { x: number; y: number; width: number; height: number }): void =>
+    ipcRenderer.send('capture-overlay:select', rect),
+  /** overlay 取消（Esc / 点击空白 / 拖拽过小） */
+  captureOverlayCancel: (): void => ipcRenderer.send('capture-overlay:cancel'),
+  /** 屏幕选择器：用户点击目标屏后通知主进程（仅屏幕选择器窗口可调用） */
+  captureScreenPick: (idx: number): void => ipcRenderer.send('capture-screen-pick', idx),
+  /** 产品标注 URL 采集：内置浏览器截图完成后回传结果到主窗口（新建页面用） */
+  newPageResult: (data: { dataUrl: string; name?: string }): void => ipcRenderer.send('browser:new-page-result', data),
+  /** 监听内置浏览器 URL 采集回传结果（新建页面用） */
+  onNewPageResult: (cb: (data: { dataUrl: string; name?: string }) => void): (() => void) => {
+    const handler = (_e: any, data: { dataUrl: string; name?: string }) => cb(data)
+    ipcRenderer.on('browser:new-page-result', handler as any)
+    return () => ipcRenderer.removeListener('browser:new-page-result', handler as any)
+  },
+  /** 产品标注画布 URL 采集：替换当前页图片的回传通道 */
+  urlCaptureResult: (data: { dataUrl: string; name?: string }): void => ipcRenderer.send('browser:url-capture-result', data),
+  /** 监听内置浏览器 URL 采集回传结果（画布替换图片用） */
+  onUrlCaptureResult: (cb: (data: { dataUrl: string; name?: string }) => void): (() => void) => {
+    const handler = (_e: any, data: { dataUrl: string; name?: string }) => cb(data)
+    ipcRenderer.on('browser:url-capture-result', handler as any)
+    return () => ipcRenderer.removeListener('browser:url-capture-result', handler as any)
+  },
+  /** 打开内置浏览器弹窗（支持 captureMode 产品标注采集模式） */
+  openBrowserWindow: (url?: string, opts?: { captureMode?: boolean; loginMode?: boolean; capturePurpose?: 'newPage' | 'replaceImage' }): Promise<{ ok: boolean; message: string }> =>
+    ipcRenderer.invoke('browser:openWindow', url, opts),
+  // ===== macOS 录屏权限引导（截图功能依赖系统「录屏与系统录音」授权） =====
+  /** 查询屏幕录制权限状态（darwin 返回实际状态，其他平台恒为 granted） */
+  screenPermissionStatus: (): Promise<'granted' | 'denied' | 'restricted' | 'not-determined'> =>
+    ipcRenderer.invoke('permission:screenStatus'),
+  /** 打开系统设置 → 隐私与安全性 → 录屏与系统录音 */
+  openScreenPermissionSettings: (): Promise<void> => ipcRenderer.invoke('permission:openScreenSettings'),
+  /** 应用信息（名称 + 图标 dataURL，权限引导弹窗展示用） */
+  getAppInfo: (): Promise<{ name: string; iconDataUrl: string }> => ipcRenderer.invoke('permission:appInfo'),
+  /** 启动应用包原生拖拽：按住引导弹窗图标 → 拖入系统设置列表完成授权 */
+  startAppDrag: (): Promise<boolean> => ipcRenderer.invoke('permission:startAppDrag')
 }
 
 export type ElectronAPI = typeof api

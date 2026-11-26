@@ -60,7 +60,7 @@ export default function MatchConfirmDrawer({ items, onConfirm, onClose }: Props)
                   <ul className="confirm-pair-diffs">
                     {diffs.slice(0, 4).map((d, di) => (
                       <li key={di}>
-                        <span className={`severity-badge severity-${d.severity}`}>{d.label}</span>
+                        <span className={`badge ${d.severity === 'major' ? 'badge-danger' : d.severity === 'minor' ? 'badge-warning' : 'badge-neutral'}`}>{d.label}</span>
                         {d.designValue} → {d.devValue}
                       </li>
                     ))}

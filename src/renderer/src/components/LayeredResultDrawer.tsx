@@ -41,7 +41,7 @@ export default function LayeredResultDrawer({ summary, onClose }: Props) {
               <div key={i} className="confirm-pair">
                 <div className="confirm-pair-main">
                   <div className="confirm-pair-head">
-                    <span className={`severity-badge severity-${it.severity}`}>
+                    <span className={`badge ${it.severity === 'major' ? 'badge-danger' : it.severity === 'minor' ? 'badge-warning' : 'badge-neutral'}`}>
                       {t(`level_${it.level}`)} · {t(`dim_${it.dim}`)}
                     </span>
                     <span className={`lr-verdict lr-verdict-${it.verdict}`}>{t(`verdict_${it.verdict}`)}</span>

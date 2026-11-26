@@ -20,7 +20,9 @@ extension Color {
 
     static let warning = Color(hex: "#f59e0b")
     static let danger = Color(hex: "#dc2626")
-    static let dangerBg = Color(hex: "#fef2f2")
+    // global.css: .btn-danger:hover 底色（非 --danger-soft #fde8e8，后者是浅底徽章语义）
+    static let dangerHover = Color(hex: "#fef2f2")
+    // P05: SwiftUI 端 danger 按钮描边专用（AppComponents.borderColor）；CSS 无对应使用场景，不补 CSS 死定义
     static let dangerBorder = Color(hex: "#f2c1c1")
 
     // 文字色
@@ -127,7 +129,8 @@ extension Color.Dark {
     static let scrollbarThumb = Color(hex: "#333b48")
     static let scrollbarHover = Color(hex: "#434e5e")
 
-    static let windowInactive = Color(hex: "#c9cdd3")
+    // global.css: [data-theme='dark'] .window-controls.inactive 的置灰色
+    static let windowInactive = Color(hex: "#4b5058")
 }
 
 // MARK: - 字体
@@ -137,12 +140,12 @@ enum FontTokens {
     // CSS: body 14px, nav-item 13px, page-header h1 20px
     enum Size {
         static let pageHeader: CGFloat = 20
-        static let sectionHeader: CGFloat = 15
+        static let sectionHeader: CGFloat = 16
         static let body: CGFloat = 14
         static let bodySmall: CGFloat = 13
-        static let caption: CGFloat = 12.5
+        static let caption: CGFloat = 12
         static let captionSmall: CGFloat = 12
-        static let tiny: CGFloat = 11.5
+        static let tiny: CGFloat = 11
         static let micro: CGFloat = 11
         static let nano: CGFloat = 10
     }
@@ -161,8 +164,8 @@ enum FontTokens {
 
 enum Spacing {
     static let zero: CGFloat = 0
-    static let xs: CGFloat = 2
-    static let xxs: CGFloat = 4
+    static let xs: CGFloat = 4
+    static let xxs: CGFloat = 2
     static let sm: CGFloat = 6
     static let md: CGFloat = 8
     static let mg: CGFloat = 10
@@ -194,6 +197,7 @@ enum Radius {
 
 // MARK: - 阴影
 
+// P05: 基色 #101828 与 CSS rgba(16,24,40,…) 同值异写法（SwiftUI 无 rgba() 构造，hex + opacity 等价），四档对齐 CSS var(--shadow-card/pop/hover/float)
 enum Shadow {
     struct Token {
         let color: Color
@@ -221,6 +225,10 @@ enum Shadow {
 enum AnimationDuration {
     static let fast: Double = 0.12
     static let normal: Double = 0.15
+    // P05 新增（对齐 CSS 过渡档位）：transform/background/left 过渡与 toast-in、ai-panel-in 入场
+    static let medium: Double = 0.18
+    // P05 新增：侧栏等宽度过渡（transition: width 0.3s）与 animation-delay 0.3s
+    static let extended: Double = 0.3
     static let slow: Double = 0.4
     static let aiShine: Double = 3.2
     static let aiPulse: Double = 1.5

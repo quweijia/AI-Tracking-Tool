@@ -9,3 +9,20 @@ release/
 *.log
 .DS_Store
 resources/gates/node_modules/
+# Apple 公证凭据（含 App 专用密码），切勿提交
+.env
+
+# —— v2.0.0 发版决定不入库的本地内容 ——
+# Web 迁移实验目录（含独立 node_modules）
+webapp/
+# TRAE HTML 分享缓存
+.trae-html-share-packages/
+# 验收截图与验收笔记
+阶段1验收截图/
+p01-p15-acceptance/
+p12-acceptance/
+# 本地文档与草稿（PPT/PDF/脑图/方案/调试笔记）
+docs/
+debug-dev-shot-repeat.md
+Electron转Web迁移评估报告.md
+Web版独立开发方案.md

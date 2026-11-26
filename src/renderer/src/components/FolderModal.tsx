@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useTranslation } from 'react-i18next'
-import { db, deleteFolderCascade, Folder } from '../db'
+import { db, softDeleteFolders, Folder } from '../db'
 import { FOLDER_COLORS, FOLDER_ICONS, FolderIconGlyph } from './FolderIcon'
+import { confirmDialog } from './ConfirmDialog'
+import { showToast } from './Toast'
 
 interface Props {
   projectId: string
@@ -49,10 +51,11 @@ export default function FolderModal({ projectId, parentId, folder, onDone, onCan
 
   const handleDelete = async () => {
     if (!folder) return
-    const ok = window.confirm(t('deleteConfirm', { name: folder.name }))
+    const ok = await confirmDialog({ message: t('deleteConfirm', { name: folder.name }), tone: 'danger' })
     if (!ok) return
-    await deleteFolderCascade(folder.id)
+    await softDeleteFolders([folder.id])
     onDone()
+    showToast(t('common:movedToTrash'), { tone: 'info' })
   }
 
   const handleSave = async () => {
@@ -114,7 +117,8 @@ export default function FolderModal({ projectId, parentId, folder, onDone, onCan
               title={t(it.label, { ns: 'folderIcon' })}
               onClick={() => setIcon(it.key)}
             >
-              <FolderIconGlyph icon={it.key} size={18} />
+              {/* 弹窗内实时预览当前所选主题色（默认矢量文件夹 icon 随之着色） */}
+              <FolderIconGlyph icon={it.key} size={18} color={icon === it.key ? color : undefined} />
             </button>
           ))}
         </div>

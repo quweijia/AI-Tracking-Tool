@@ -118,7 +118,7 @@ struct ProjectDetailView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, Spacing.xlg)
-                    .padding(.vertical, Spacing.xxs)
+                    .padding(.vertical, Spacing.xs)
                     .contentShape(Rectangle())
                     .onTapGesture { scopeFolderID = nil }
 
@@ -157,7 +157,7 @@ struct ProjectDetailView: View {
             PageStatusBadgeView(status: page.status)
         }
         .padding(.horizontal, Spacing.xlg)
-        .padding(.vertical, Spacing.xxs)
+        .padding(.vertical, Spacing.xs)
         .contentShape(Rectangle())
         .onTapGesture { appState.open(page: page, context: context) }
         .contextMenu {

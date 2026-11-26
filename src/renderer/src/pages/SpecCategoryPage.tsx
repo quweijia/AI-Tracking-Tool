@@ -3,6 +3,7 @@ import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { SpecPlatIcon } from '../components/Layout'
+import { confirmDialog } from '../components/ConfirmDialog'
 import {
   db,
   bySort,
@@ -31,10 +32,10 @@ import SpecModal from '../components/SpecModal'
 import USelect from '../components/USelect'
 import heroBannerArtUrl from '../assets/hero-banner-xmxq.png'
 import heroBannerArtDarkUrl from '../assets/hero-banner-xmxq-dark.png'
-import heroBannerCatArtUrl from '../assets/hero-banner-art.png'
+import heroBannerCatArtUrl from '../assets/hero-banner-dgf.png'
 import heroBannerGfUrl from '../assets/hero-banner-gf.png'
 import heroBannerGfDarkUrl from '../assets/hero-banner-gf-dark.png'
-import heroBannerCatArtDarkUrl from '../assets/hero-banner-art-dark.png'
+import heroBannerCatArtDarkUrl from '../assets/hero-banner-dgf-dark.png'
 
 /** 一期 7 类 Token（左栏顺序） */
 const KINDS: TokenKind[] = ['color', 'spacing', 'fontSize', 'lineHeight', 'radius', 'shadow', 'border']
@@ -211,7 +212,7 @@ export default function SpecCategoryPage() {
     [] as SpecToken[]
   )
   const bindingsAll = useLiveQuery(() => db.projectSpecBindings.toArray(), [])
-  const projects = useLiveQuery(async () => (await db.projects.toArray()).sort(bySort), [])
+  const projects = useLiveQuery(async () => (await db.projects.toArray()).filter((p) => !p.deletedAt).sort(bySort), [])
 
   // ───────────── 本地状态 ─────────────
   const [srcTab, setSrcTab] = useState<'url' | 'fig' | 'json'>('url')
@@ -558,7 +559,7 @@ export default function SpecCategoryPage() {
       const res = await syncSpecFromFigma(activeSpec, { mode })
       if (res.variableDenied) {
         // 变量级 403（无变量读取权限，Enterprise 专属）：询问是否改同步样式
-        if (window.confirm(t('variableDeniedAsk'))) {
+        if (await confirmDialog({ message: t('variableDeniedAsk') })) {
           setSyncOk(await syncSpecFromFigma(activeSpec, { mode, startLevel: 'style' }))
         } else {
           setSyncErr(t('variableDeniedCancel'))
@@ -581,18 +582,18 @@ export default function SpecCategoryPage() {
 
   /** 移除 .fig 源文件记录（仅清展示，不影响已导入的 Token / 版本） */
   const handleRemoveFig = async () => {
-    if (!activeSpec || !window.confirm(t('srcRemoveConfirm'))) return
+    if (!activeSpec || !(await confirmDialog({ message: t('srcRemoveConfirm'), tone: 'danger' }))) return
     await db.designSpecs.update(activeSpec.id, { figArchivePath: undefined })
   }
 
   /** 移除 JSON 源文件记录 */
   const handleRemoveJson = async () => {
-    if (!activeSpec || !window.confirm(t('srcRemoveConfirm'))) return
+    if (!activeSpec || !(await confirmDialog({ message: t('srcRemoveConfirm'), tone: 'danger' }))) return
     await db.designSpecs.update(activeSpec.id, { jsonSourceNames: undefined })
   }
 
   const handleRollback = async (v: SpecVersion) => {
-    if (!activeSpec || !window.confirm(t('rollbackConfirm', { no: v.no }))) return
+    if (!activeSpec || !(await confirmDialog({ message: t('rollbackConfirm', { no: v.no }) }))) return
     setSyncOk(null)
     setSyncErr(null)
     try {
@@ -605,7 +606,7 @@ export default function SpecCategoryPage() {
 
   /** 删除历史版本（当前生效版本不可删；版本与 Token 一并移除） */
   const handleDeleteVersion = async (v: SpecVersion) => {
-    if (!activeSpec || !window.confirm(t('deleteVerConfirm', { no: v.no }))) return
+    if (!activeSpec || !(await confirmDialog({ message: t('deleteVerConfirm', { no: v.no }), tone: 'danger' }))) return
     setSyncOk(null)
     setSyncErr(null)
     try {
@@ -678,7 +679,7 @@ export default function SpecCategoryPage() {
 
   const handleDeleteSpec = async () => {
     if (!activeSpec) return
-    if (!window.confirm(t('deleteSpecConfirm', { name: activeSpec.name }))) return
+    if (!(await confirmDialog({ message: t('deleteSpecConfirm', { name: activeSpec.name }), tone: 'danger' }))) return
     await deleteSpecCascade(activeSpec.id)
     setEditing(null)
   }
@@ -741,7 +742,7 @@ export default function SpecCategoryPage() {
       {/* 顶部横幅：返回端分类总览 + 规范名（悬停显示编辑/删除）+ 导出/同步（与项目详情横幅统一） */}
       <div className="rv2-hero detail-hero">
         <div className="rv2-hero-main">
-          <Link to={`/specs/${categoryId}`} className="back-link">
+          <Link to={`/specs/${categoryId}`} className="back-link" draggable={false}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M15 18l-6-6 6-6" />
             </svg>
@@ -762,7 +763,7 @@ export default function SpecCategoryPage() {
           </h1>
           <div className="detail-meta">
             {applied && (
-              <span className="specx-pill ok">
+              <span className="chip chip-sm specx-pill ok">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                   <path d="M20 6 9 17l-5-5" />
                 </svg>
@@ -832,14 +833,14 @@ export default function SpecCategoryPage() {
                   <p>{t('srcDesc')}</p>
                 </div>
                 {/* 分段切换：Figma 链接 | 上传 .fig（置于卡片头右上角） */}
-                <div className="specx-segtabs">
-                  <button type="button" className={srcTab === 'url' ? 'active' : ''} onClick={() => setSrcTab('url')}>
+                <div className="tabs tabs--segmented">
+                  <button type="button" className={srcTab === 'url' ? 'tabs-item active' : 'tabs-item'} onClick={() => setSrcTab('url')}>
                     {t('srcTabUrl')}
                   </button>
-                  <button type="button" className={srcTab === 'fig' ? 'active' : ''} onClick={() => setSrcTab('fig')}>
+                  <button type="button" className={srcTab === 'fig' ? 'tabs-item active' : 'tabs-item'} onClick={() => setSrcTab('fig')}>
                     {t('srcTabFig')}
                   </button>
-                  <button type="button" className={srcTab === 'json' ? 'active' : ''} onClick={() => setSrcTab('json')}>
+                  <button type="button" className={srcTab === 'json' ? 'tabs-item active' : 'tabs-item'} onClick={() => setSrcTab('json')}>
                     {t('srcTabJson')}
                   </button>
                 </div>
@@ -977,7 +978,7 @@ export default function SpecCategoryPage() {
                 <div className="specx-card-titles">
                   <h3>{t('verTitle')}</h3>
                 </div>
-                {latest ? <span className="specx-pill ok">{t('verLatest')}</span> : <span className="specx-pill gray">{t('verNone')}</span>}
+                {latest ? <span className="chip chip-sm specx-pill ok">{t('verLatest')}</span> : <span className="chip chip-sm specx-pill gray">{t('verNone')}</span>}
               </div>
               {/* 版本号可点击查看历史版本（原「查看历史版本」按钮移除） */}
               <button
@@ -1214,7 +1215,7 @@ export default function SpecCategoryPage() {
                         {/* 项目 Logo 与项目列表完全一致（图片/首字符/按 id 散列底色） */}
                         <ProjectLogo project={p} />
                         <b title={p.name}>{p.name}</b>
-                        <span className={`specx-pill ${pillCls}`}>{pillText}</span>
+                        <span className={`chip chip-sm specx-pill ${pillCls}`}>{pillText}</span>
                       </div>
                       <p className="specx-bind-desc">{desc}</p>
                       <div className="specx-bind-actions">
@@ -1257,9 +1258,9 @@ export default function SpecCategoryPage() {
               </button>
               <button
                 className="btn-danger"
-                onClick={() => {
+                onClick={async () => {
                   // 删除原数据不可恢复：二次确认
-                  if (window.confirm(t('modeReplaceConfirm'))) modeAsk('replace')
+                  if (await confirmDialog({ message: t('modeReplaceConfirm'), tone: 'danger' })) modeAsk('replace')
                 }}
               >
                 {t('modeReplace')}
@@ -1443,7 +1444,7 @@ export function SpecsCategoryIndex() {
       {/* 顶部横幅：返回规范中心 + 端分类名 + 新建规范（与项目详情横幅统一） */}
       <div className="rv2-hero detail-hero">
         <div className="rv2-hero-main">
-          <Link to="/specs" className="back-link">
+          <Link to="/specs" className="back-link" draggable={false}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M15 18l-6-6 6-6" />
             </svg>
@@ -1486,7 +1487,7 @@ export function SpecsCategoryIndex() {
             // 同步状态：已关联 Figma 且完成过同步（有同步版本/时间）才算正常；仅贴链接未同步显示「未同步」
             const state: CatState = s.figmaFileKey && (latest?.syncedAt || s.lastSyncedAt) ? 'ok' : 'none'
             return (
-              <Link key={s.id} to={`/specs/${categoryId}/spec/${s.id}`} className="card specx-catcard">
+              <Link key={s.id} to={`/specs/${categoryId}/spec/${s.id}`} className="card specx-catcard" draggable={false}>
                 <div className="specx-cat-top">
                   <span className="specx-cat-ico" aria-hidden>
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1494,7 +1495,7 @@ export function SpecsCategoryIndex() {
                       <path d="m2 14 10 6 10-6" />
                     </svg>
                   </span>
-                  {latest && <span className="specx-pill gray">V{latest.no}</span>}
+                  {latest && <span className="chip chip-sm specx-pill gray">V{latest.no}</span>}
                 </div>
                 <b className="specx-cat-name" title={s.name}>
                   {s.name}
@@ -1684,7 +1685,7 @@ export function SpecsIndex() {
   const specsAll = useLiveQuery(() => db.designSpecs.toArray())
   const versionsAll = useLiveQuery(() => db.specVersions.toArray())
   const bindings = useLiveQuery(() => db.projectSpecBindings.toArray())
-  const projects = useLiveQuery(() => db.projects.toArray())
+  const projects = useLiveQuery(async () => (await db.projects.toArray()).filter((p) => !p.deletedAt))
 
   const cats = useMemo(() => [...(categories ?? [])].sort(bySort), [categories])
   const projectName = useMemo(() => new Map((projects ?? []).map((p) => [p.id, p.name])), [projects])
@@ -1926,13 +1927,13 @@ export function SpecsIndex() {
         {cats.map((c) => {
           const info = catInfo.get(c.id) ?? { specCount: 0, tokenCount: 0, state: 'empty' as CatState, lastSync: 0 }
           return (
-            <Link key={c.id} to={`/specs/${c.id}`} className="card specx-catcard">
+            <Link key={c.id} to={`/specs/${c.id}`} className="card specx-catcard" draggable={false}>
               <div className="specx-cat-top">
                 <span className="specx-cat-ico" aria-hidden>
                   <SpecPlatIcon platformKey={c.platformKey} />
                 </span>
                 {appliedCats.has(c.id) && (
-                  <span className="specx-pill ok">
+                  <span className="chip chip-sm specx-pill ok">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                       <path d="M20 6 9 17l-5-5" />
                     </svg>
@@ -2159,7 +2160,7 @@ export function SpecsIndex() {
                           {catNameOf(cat)}
                         </span>
                         <span>
-                          <span className={`specx-pill ${CHECK_STATUS[status].cls}`}>
+                          <span className={`chip chip-sm specx-pill ${CHECK_STATUS[status].cls}`}>
                             {t(CHECK_STATUS[status].key)}
                           </span>
                         </span>

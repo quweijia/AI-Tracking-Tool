@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import DevBrowser, { type DevBrowserHandle } from '../components/DevBrowser'
+import DevBrowser, { type DevBrowserHandle, isLoginUrl } from '../components/DevBrowser'
+import { CAPTURE_STORAGE_SCRIPT, buildLoginProbeScript } from '../components/walkSessionScripts'
 import USelect from '../components/USelect'
+import { showScreenPermissionGuide } from '../components/ScreenPermissionGuide'
 
 /** label 为 browserPopupPage ns 的 i18n key */
 const VIEWPORT_PRESETS: { value: string; label: string; width: number; height: number }[] = [
@@ -53,6 +55,117 @@ export default function BrowserPopupPage() {
   const [sending, setSending] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
+  // 消息 10 秒后自动消失
+  const prevMsgTextRef = useRef('')
+  useEffect(() => {
+    if (!msg || msg.text === prevMsgTextRef.current) return
+    prevMsgTextRef.current = msg.text
+    const timer = setTimeout(() => setMsg(null), 10000)
+    return () => clearTimeout(timer)
+  }, [msg])
+
+  // ===== 登录模式（自动走查检测到登录页时唤起）：手动登录 → 命中「登录成功标识」→ 抓取上下文 → 保存会话 profile =====
+  /** 登录成功标识：css:选择器 / url:关键词 / 页面文本关键词；留空走默认启发式 */
+  const loginMode = searchParams.get('mode') === 'login'
+  // ===== 产品标注 URL 采集模式（来自产品标注新建页面）：仅显示三种截图按钮 =====
+  const captureMode = searchParams.get('mode') === 'capture'
+  /** 采集用途：newPage=新建页面（来自项目详情页），replaceImage=替换画布图片（来自画布页 hover 按钮） */
+  const capturePurpose = (searchParams.get('purpose') as 'newPage' | 'replaceImage') || 'newPage'
+  console.log('[BrowserPopupPage] mode=search:', searchParams.get('mode'), 'captureMode:', captureMode, 'purpose:', capturePurpose, 'hash:', window.location.hash)
+  const [marker, setMarker] = useState('')
+  /** 登录流程状态文案（等待/保存中/已保存） */
+  const [loginStatus, setLoginStatus] = useState('')
+  /** 登录保存中（防重复触发） */
+  const loginSavingRef = useRef(false)
+
+  // 登录模式：预填该域名上次使用的登录成功标识
+  useEffect(() => {
+    if (!loginMode || !initialUrl) return
+    void window.electronAPI
+      .walkSessionLoad(initialUrl)
+      .then((res) => {
+        if (res?.profile?.marker) setMarker(res.profile.marker)
+      })
+      .catch(() => undefined)
+  }, [loginMode, initialUrl])
+
+  /** 默认成功启发式：同一目标域名下离开登录 URL 且无可见密码框 */
+  const loginHit = (probe: { url: string; pw: boolean; sel: boolean; text: string }): boolean => {
+    const m = marker.trim()
+    if (m) {
+      if (m.startsWith('css:')) return probe.sel
+      if (m.startsWith('url:')) return probe.url.includes(m.slice(4).trim())
+      return probe.text.includes(m)
+    }
+    try {
+      const sameHost = new URL(probe.url).host === new URL(initialUrl).host
+      return sameHost && !isLoginUrl(probe.url) && !probe.pw
+    } catch {
+      return false
+    }
+  }
+
+  /** 抓取 webview 上下文并加密保存会话 profile，通知主窗口恢复走查后自动关窗 */
+  const finishLogin = async (): Promise<void> => {
+    if (loginSavingRef.current) return
+    loginSavingRef.current = true
+    setLoginStatus(t('loginSaving'))
+    try {
+      const dev = devRef.current
+      let snap: { ls?: Record<string, string>; ss?: Record<string, string>; idb?: unknown[]; message?: string } = {}
+      if (dev) {
+        const raw = String(await dev.evaluate(CAPTURE_STORAGE_SCRIPT))
+        snap = JSON.parse(raw) as typeof snap
+        // 快照超 20MB 时丢弃 indexedDB（异常站点缓存过大，保存优先保障登录态核心）
+        if (raw.length > 20_000_000) snap.idb = []
+      }
+      const cur = dev?.getUrl() || initialUrl
+      const res = await window.electronAPI.walkSessionSave({
+        url: cur || initialUrl,
+        marker: marker.trim() || undefined,
+        ls: snap.ls,
+        ss: snap.ss,
+        idb: snap.idb
+      })
+      if (!res?.ok) throw new Error(res?.message || 'save failed')
+      setLoginStatus(t('loginSaved'))
+      window.electronAPI.popupSendLoginResult()
+      // 结果已回传主窗口：延迟关闭弹窗（等待消息发出）
+      setTimeout(() => window.close(), 600)
+    } catch (err) {
+      loginSavingRef.current = false
+      setLoginStatus('')
+      setMsg({ ok: false, text: t('loginSaveFail', { msg: err instanceof Error ? err.message : String(err) }) })
+    }
+  }
+
+  // 登录模式：轮询探测登录成功（命中标识自动抓取保存，无需用户手动确认）
+  useEffect(() => {
+    if (!loginMode) return
+    let stopped = false
+    const tick = async (): Promise<void> => {
+      if (stopped || loginSavingRef.current) return
+      const dev = devRef.current
+      if (!dev) return
+      try {
+        const cur = dev.getUrl()
+        if (!cur || cur === 'about:blank') return
+        const m = marker.trim()
+        const probeRaw = String(await dev.evaluate(buildLoginProbeScript(m.startsWith('css:') ? m.slice(4) : '')))
+        const probe = JSON.parse(probeRaw) as { url: string; pw: boolean; sel: boolean; text: string }
+        if (stopped || loginSavingRef.current) return
+        if (loginHit(probe)) void finishLogin()
+      } catch {
+        // 页面跳转中/脚本未就绪：下一轮重试
+      }
+    }
+    const timer = window.setInterval(() => void tick(), 1500)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+  }, [loginMode, marker])
+
   // 拉取已下发的视口 + 监听后续下发（规避「先发送后加载」竞态：挂载时主动拉一次）
   useEffect(() => {
     void window.electronAPI.popupGetViewport().then((vp) => {
@@ -82,10 +195,10 @@ export default function BrowserPopupPage() {
     return { width: clampW(customW), height: clampVp(customH) }
   }, [vpKey, walkVp, customW, customH])
 
-  // 独立窗口：原生标题栏显示「内置浏览器」（覆盖 index.html 的应用标题）
+  // 独立窗口：原生标题栏显示「内置浏览器」/「登录 · 内置浏览器」（覆盖 index.html 的应用标题）
   useEffect(() => {
-    document.title = t('builtinBrowser')
-  }, [t])
+    document.title = loginMode ? t('loginTitle') : t('builtinBrowser')
+  }, [t, loginMode])
 
   useEffect(() => {
     const el = stageRef.current
@@ -136,6 +249,76 @@ export default function BrowserPopupPage() {
     }
   }
 
+  /** 将采集截图缩回 CSS 像素坐标系：webview.capturePage 按（宿主 DPR × zoom）输出物理像素，
+   * 按返回 viewport 的 CSS 宽反推像素密度后 canvas 重绘；密度 ≈1 或加载失败时原图返回 */
+  const normalizeCaptureScale = (dataUrl: string, cssWidth: number): Promise<string> => {
+    if (!cssWidth || cssWidth <= 0) return Promise.resolve(dataUrl)
+    return new Promise((resolve) => {
+      const img = new Image()
+      img.onload = () => {
+        const density = img.naturalWidth / cssWidth
+        if (!(density > 1.01)) return resolve(dataUrl)
+        const w = Math.round(cssWidth)
+        const h = Math.max(1, Math.round(img.naturalHeight / density))
+        const canvas = document.createElement('canvas')
+        canvas.width = w
+        canvas.height = h
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return resolve(dataUrl)
+        ctx.drawImage(img, 0, 0, w, h)
+        resolve(canvas.toDataURL('image/png'))
+      }
+      img.onerror = () => resolve(dataUrl)
+      img.src = dataUrl
+    })
+  }
+
+  /** 产品标注 URL 采集：三种截图方式，根据 purpose 选择回传通道 */
+  const handleCapture = async (type: 'full' | 'visible' | 'region'): Promise<void> => {
+    setSending(true)
+    setMsg(null)
+    try {
+      let dataUrl: string
+      if (type === 'region') {
+        const result = await window.electronAPI.captureRegion()
+        if (!result?.ok) {
+          // macOS 录屏权限未授权：弹出 TRAE CN 风格权限引导
+          if (result && !result.ok && result.reason === 'permission') showScreenPermissionGuide()
+          setSending(false)
+          return
+        }
+        dataUrl = result.dataUrl
+      } else {
+        const cap = await devRef.current!.runCapture(type === 'full')
+        // 采集图按宿主 DPR × zoom 输出物理像素，缩回 CSS 像素坐标系与本地上传图（1:1）一致，
+        // 否则画布按图像自然宽归一时内容被放大（实测 64px 导航条显示成 104px）
+        dataUrl = await normalizeCaptureScale(cap.screenshotDataUrl, cap.viewport.width)
+      }
+      // 从网页 <title> 获取页面名称
+      let name = '页面'
+      try {
+        const titleResult = await devRef.current!.evaluate('document.title')
+        if (titleResult && typeof titleResult === 'string' && titleResult.trim()) {
+          name = titleResult.trim()
+        }
+      } catch {
+        // 获取失败，使用默认值
+      }
+      // 根据用途选择不同的回传通道
+      console.log('[BrowserPopupPage] 捕捉完成回传:', capturePurpose, 'dataUrl 长度:', dataUrl?.length ?? 0)
+      if (capturePurpose === 'replaceImage') {
+        window.electronAPI.urlCaptureResult({ dataUrl, name })
+      } else {
+        window.electronAPI.newPageResult({ dataUrl, name })
+      }
+      setTimeout(() => window.close(), 400)
+    } catch (err) {
+      setMsg({ ok: false, text: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setSending(false)
+    }
+  }
+
   /** 生成问题标注：本页采集 DOM + 截图，回传主窗口走查面板 */
   const generateAnnotations = async (): Promise<void> => {
     if (sending) return
@@ -156,7 +339,7 @@ export default function BrowserPopupPage() {
   return (
     <div className="browser-popup">
       <div className="bp-topbar">
-        <span className="bp-title">{t('builtinBrowser')}</span>
+        <span className="bp-title">{loginMode ? t('loginTitle') : t('builtinBrowser')}</span>
         <input
           className="input bp-url"
           placeholder={t('urlPlaceholder')}
@@ -164,6 +347,15 @@ export default function BrowserPopupPage() {
           onChange={(e) => setUrlInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && load()}
         />
+        {loginMode && (
+          <input
+            className="input bp-marker"
+            placeholder={t('loginMarkerPlaceholder')}
+            title={t('loginMarker')}
+            value={marker}
+            onChange={(e) => setMarker(e.target.value)}
+          />
+        )}
         <button
           className="btn-secondary"
           disabled={!urlInput.trim()}
@@ -180,35 +372,37 @@ export default function BrowserPopupPage() {
         >
           {t('refresh')}
         </button>
-        <div className="bp-vp">
-          <USelect value={vpKey} onChange={setVpKey} options={vpOptions} />
-          {vpKey === 'custom' && (
-            <>
-              <span className="auto-walk-custom-vp">
-                {t('widthLabel')}
-                <input
-                  className="input input-sm"
-                  type="number"
-                  min={240}
-                  max={3840}
-                  value={customW}
-                  onChange={(e) => setCustomW(Number(e.target.value))}
-                />
-              </span>
-              <span className="auto-walk-custom-vp">
-                {t('heightLabel')}
-                <input
-                  className="input input-sm"
-                  type="number"
-                  min={240}
-                  max={21600}
-                  value={customH}
-                  onChange={(e) => setCustomH(Number(e.target.value))}
-                />
-              </span>
-            </>
-          )}
-        </div>
+        {!loginMode && (
+          <div className="bp-vp">
+            <USelect value={vpKey} onChange={setVpKey} options={vpOptions} />
+            {vpKey === 'custom' && (
+              <>
+                <span className="auto-walk-custom-vp">
+                  {t('widthLabel')}
+                  <input
+                    className="input input-sm"
+                    type="number"
+                    min={240}
+                    max={3840}
+                    value={customW}
+                    onChange={(e) => setCustomW(Number(e.target.value))}
+                  />
+                </span>
+                <span className="auto-walk-custom-vp">
+                  {t('heightLabel')}
+                  <input
+                    className="input input-sm"
+                    type="number"
+                    min={240}
+                    max={21600}
+                    value={customH}
+                    onChange={(e) => setCustomH(Number(e.target.value))}
+                  />
+                </span>
+              </>
+            )}
+          </div>
+        )}
         {sending && <span className="bp-capturing">{t('capturing')}</span>}
       </div>
       {msg && <p className={`auto-walk-msg ${msg.ok ? 'ok' : 'err'} bp-msg`}>{msg.text}</p>}
@@ -224,8 +418,45 @@ export default function BrowserPopupPage() {
           onLoadingChange={(loading) => setPageLoaded(!loading)}
         />
       </div>
-      {walkVp && (
+      {loginMode ? (
         <div className="bp-actionbar">
+          <span className="bp-actionbar-hint">
+            {loginStatus || t('loginHint')}
+          </span>
+          <button className="btn-primary" disabled={loginSavingRef.current} onClick={() => void finishLogin()}>
+            {loginSavingRef.current ? t('loginSaving') : t('loginManual')}
+          </button>
+        </div>
+      ) : captureMode ? (
+        <div className="bp-actionbar">
+          <span className="bp-actionbar-hint">
+            {pageLoaded ? t('captureHint') : t('hintWaiting')}
+          </span>
+          <button
+            className="btn-secondary"
+            disabled={!pageLoaded || sending}
+            onClick={() => void handleCapture('full')}
+          >
+            {t('captureFullPage')}
+          </button>
+          <button
+            className="btn-secondary"
+            disabled={!pageLoaded || sending}
+            onClick={() => void handleCapture('visible')}
+          >
+            {t('captureVisible')}
+          </button>
+          <button
+            className="btn-primary"
+            disabled={sending}
+            onClick={() => void handleCapture('region')}
+          >
+            {t('captureRegion')}
+          </button>
+        </div>
+      ) : (
+        walkVp && (
+          <div className="bp-actionbar">
           <label className="inline-label">
             <input type="checkbox" checked={fullPage} onChange={(e) => setFullPage(e.target.checked)} />
             {t('fullPage')}
@@ -261,7 +492,8 @@ export default function BrowserPopupPage() {
           >
             {sending ? t('generating') : t('generateAnnotations')}
           </button>
-        </div>
+          </div>
+        )
       )}
     </div>
   )

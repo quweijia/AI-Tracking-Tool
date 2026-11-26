@@ -3,17 +3,50 @@
  * 全部为实底填充风格，颜色随 currentColor 继承。
  */
 import type { ReactNode } from 'react'
+import { useId } from 'react'
 
-/** label 为 folderIcon ns 的 i18n key，展示方用 t(label, { ns: 'folderIcon' }) 翻译 */
-export const FOLDER_ICONS: { key: string; label: string; render: (size?: number) => ReactNode }[] = [
+/** 与黑/白混合调色（amt>0 提亮、<0 压暗），输入输出均为 hex */
+function shade(hex: string, amt: number): string {
+  const h = hex.replace('#', '')
+  const v = h.length === 3 ? h.split('').map((c) => c + c).join('') : h
+  const n = parseInt(v, 16)
+  const t = amt > 0 ? 255 : 0
+  const p = Math.abs(amt)
+  const mix = (c: number) => Math.round((t - c) * p + c)
+  return `#${[mix((n >> 16) & 255), mix((n >> 8) & 255), mix(n & 255)]
+    .map((c) => c.toString(16).padStart(2, '0'))
+    .join('')}`
+}
+
+/** 黄色文件夹渐变图标（React 组件，gradient ID 唯一）。
+ *  传入 color 时按该主题色派生：背衬标签压暗 32%、面板渐变提亮 22% → 压暗 8%，
+ *  让默认矢量文件夹 icon 跟随弹窗所选颜色（不传保持原黄色） */
+const YellowFolderIcon = ({ size = 16, color }: { size?: number; color?: string }) => {
+  const gradId = `yf-${useId()}`
+  const back = color ? shade(color, -0.32) : '#C77E19'
+  const gradTop = color ? shade(color, 0.22) : '#FFD66B'
+  const gradBottom = color ? shade(color, -0.08) : '#F0A828'
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" fill="none" aria-hidden>
+      <path d="M31 10V16H1V10V7.5C1 5.5 2.63636 4 4.81818 4H8.63636C9.4 4 10.0545 4.4 10.4909 4.8L12.4545 6.5H27.1818C29.2545 6.5 31 8 31 10Z" fill={back} />
+      <path d="M31 25.0123V14C31 12.3431 29.6569 11 28 11H4C2.34315 11 1 12.3431 1 14V25.0123C1 27.2277 3.06897 29 5.65517 29H26.3448C28.931 29 31 27.2277 31 25.0123Z" fill={`url(#${gradId})`} />
+      <defs>
+        <linearGradient id={gradId} x1="16" y1="14.4338" x2="16" y2="28.5301" gradientUnits="userSpaceOnUse">
+          <stop stopColor={gradTop} />
+          <stop offset="1" stopColor={gradBottom} />
+        </linearGradient>
+      </defs>
+    </svg>
+  )
+}
+
+/** label 为 folderIcon ns 的 i18n key，展示方用 t(label, { ns: 'folderIcon' }) 翻译。
+ *  render 第二参为主题色：仅默认文件夹渐变 icon 使用（其余 currentColor 图标由外层 color 样式继承） */
+export const FOLDER_ICONS: { key: string; label: string; render: (size?: number, color?: string) => ReactNode }[] = [
   {
     key: 'folder',
     label: 'iconFolder',
-    render: (size = 16) => (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-        <path d="M3 6.5A2.5 2.5 0 0 1 5.5 4h3.6a2 2 0 0 1 1.5.68L12.1 6.3H18.5A2.5 2.5 0 0 1 21 8.8v8.7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11Z" />
-      </svg>
-    )
+    render: (size = 16, color) => <YellowFolderIcon size={size} color={color} />,
   },
   {
     key: 'layers',
@@ -95,18 +128,17 @@ export const FOLDER_ICONS: { key: string; label: string; render: (size?: number)
 ]
 
 export const FOLDER_COLORS = [
-  '#2563EB',
-  '#7C3AED',
-  '#DB2777',
-  '#DC2626',
-  '#EA580C',
-  '#CA8A04',
-  '#16A34A',
-  '#0891B2'
+  '#FACC15',
+  '#3B82F6',
+  '#8B5CF6',
+  '#F43F5E',
+  '#F97316',
+  '#22C55E',
+  '#06B6D4'
 ]
 
-/** 按 key 渲染文件夹 icon（未知 key 或缺省回退到基础文件夹） */
-export function FolderIconGlyph({ icon, size = 16 }: { icon?: string; size?: number }) {
+/** 按 key 渲染文件夹 icon（未知 key 或缺省回退到基础文件夹）；color 传主题色时默认矢量文件夹 icon 着该色 */
+export function FolderIconGlyph({ icon, size = 16, color }: { icon?: string; size?: number; color?: string }) {
   const def = FOLDER_ICONS.find((i) => i.key === icon) ?? FOLDER_ICONS[0]
-  return <>{def.render(size)}</>
+  return <>{def.render(size, color)}</>
 }

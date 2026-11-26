@@ -1,9 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useTranslation } from 'react-i18next'
-import { db, bySort, deleteFolderCascade, Folder } from '../db'
+import { db, bySort, softDeleteFolders, Folder } from '../db'
 import { timeAgo } from './ProjectCard'
 import { FolderIconGlyph } from './FolderIcon'
+import { confirmDialog } from './ConfirmDialog'
+import { showToast } from './Toast'
+import FolderModal from './FolderModal'
 
 /** 标题编辑 icon（线性风格，随文字颜色继承） */
 function PencilIcon() {
@@ -91,48 +95,39 @@ export default function FolderCard({
   // 封面取文件夹内前 3 个页面缩略图（与侧边栏排序一致）；latest 取内容最近更新时间
   const info = useLiveQuery(
     async () => {
-      const pages = (await db.pages.where('folderId').equals(folder.id).toArray()).sort(bySort)
+      const pages = (await db.pages.where('folderId').equals(folder.id).toArray())
+        .filter((p) => !p.deletedAt)
+        .sort(bySort)
       const latest = pages.reduce((m, p) => Math.max(m, p.updatedAt ?? p.createdAt), folder.createdAt)
       return { sample: pages.slice(0, 3), count: pages.length, latest }
     },
     [folder.id]
   )
 
-  const [renaming, setRenaming] = useState(false)
-  const [renameValue, setRenameValue] = useState(folder.name)
-  const renameRef = useRef<HTMLInputElement>(null)
+  // 编辑走弹窗（重命名 + 换 icon + 主题色，编辑弹窗内亦可删除）；弹窗用 portal 挂到 body，
+  // 避免卡片 hover 的 transform 让 fixed 遮罩相对卡片定位
+  const [editing, setEditing] = useState(false)
 
-  // 非编辑态时输入框跟随文件夹名
-  useEffect(() => {
-    if (!renaming) setRenameValue(folder.name)
-  }, [folder.name, renaming])
-
-  const startRename = (e: React.MouseEvent) => {
+  const openEdit = (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    setRenaming(true)
-    setTimeout(() => renameRef.current?.select(), 0)
-  }
-
-  const commitRename = async () => {
-    setRenaming(false)
-    const trimmed = renameValue.trim()
-    if (trimmed && trimmed !== folder.name) {
-      await db.folders.update(folder.id, { name: trimmed })
-    }
+    setEditing(true)
   }
 
   const handleDelete = async (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    const ok = window.confirm(t('deleteConfirm', { name: folder.name }))
+    const ok = await confirmDialog({ message: t('deleteConfirm', { name: folder.name }), tone: 'danger' })
     if (!ok) return
-    await deleteFolderCascade(folder.id)
+    await softDeleteFolders([folder.id])
+    showToast(t('common:movedToTrash'), { tone: 'info' })
   }
   // 3 格缩略图槽：不足 3 张的剩余槽位显示占位
   const slots = [0, 1, 2]
 
   const handleCardClick = () => {
+    // 编辑弹窗打开期间卡片点击一律忽略（含 portal 事件冒泡与键盘回车）
+    if (editing) return
     if (batchMode) {
       onToggleSelect?.()
       return
@@ -145,10 +140,10 @@ export default function FolderCard({
       className={`folder-card${batchMode && selected ? ' selected' : ''}${dndDragging ? ' dragging' : ''}${
         dndDrop ? ` drop-${dndDrop}` : ''
       }`}
-      onClick={renaming ? undefined : handleCardClick}
+      onClick={handleCardClick}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => e.key === 'Enter' && !renaming && handleCardClick()}
+      onKeyDown={(e) => e.key === 'Enter' && handleCardClick()}
       {...dndHandlers}
     >
       {batchMode && (
@@ -171,40 +166,24 @@ export default function FolderCard({
           )
         })}
       </div>
-      {renaming ? (
-        <input
-          ref={renameRef}
-          className="input folder-rename-input"
-          value={renameValue}
-          autoFocus
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => setRenameValue(e.target.value)}
-          onBlur={commitRename}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void commitRename()
-            if (e.key === 'Escape') setRenaming(false)
-          }}
-        />
-      ) : (
-        <div className="folder-meta">
-          <span className="folder-name-row">
-            <span className="folder-glyph" style={folder.color ? { color: folder.color } : undefined}>
-              <FolderIconGlyph icon={folder.icon} size={14} />
-            </span>
-            <span className="folder-name" title={folder.name}>
-              {folder.name}
-            </span>
+      <div className="folder-meta">
+        <span className="folder-name-row">
+          <span className="folder-glyph" style={folder.color ? { color: folder.color } : undefined}>
+            <FolderIconGlyph icon={folder.icon} size={14} color={folder.color} />
           </span>
-          <span className="folder-time">
-            {info?.count
-              ? t('updatedAt', { time: timeAgo(info.latest) })
-              : t('createdAt', { time: timeAgo(folder.createdAt) })}
+          <span className="folder-name" title={folder.name}>
+            {folder.name}
           </span>
-        </div>
-      )}
-      {!renaming && !batchMode && (
+        </span>
+        <span className="folder-time">
+          {info?.count
+            ? t('updatedAt', { time: timeAgo(info.latest) })
+            : t('createdAt', { time: timeAgo(folder.createdAt) })}
+        </span>
+      </div>
+      {!batchMode && (
         <div className="folder-actions">
-          <button type="button" className="folder-act-btn" title={t('renameTitle')} onClick={startRename}>
+          <button type="button" className="folder-act-btn" title={t('editTitle')} onClick={openEdit}>
             <PencilIcon />
           </button>
           <button type="button" className="folder-act-btn danger" title={t('deleteTitle')} onClick={handleDelete}>
@@ -212,6 +191,21 @@ export default function FolderCard({
           </button>
         </div>
       )}
+      {editing &&
+        createPortal(
+          // portal 挂到 body 后 React 合成事件仍按组件树冒泡到卡片 onClick（点弹窗任意位置都会
+          // 误触「打开文件夹」），这里拦下冒泡；点击遮罩关闭仍由 FolderModal 自身处理
+          <div onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+            <FolderModal
+              projectId={folder.projectId}
+              parentId={folder.parentId}
+              folder={folder}
+              onDone={() => setEditing(false)}
+              onCancel={() => setEditing(false)}
+            />
+          </div>,
+          document.body
+        )}
     </div>
   )
 }

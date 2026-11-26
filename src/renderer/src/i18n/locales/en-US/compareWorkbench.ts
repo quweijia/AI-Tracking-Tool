@@ -66,6 +66,9 @@ export default {
   collapseSettings: 'Collapse settings',
   expandSettings: 'Expand settings',
   workModeSwitchTitle: 'Switch between manual annotation and auto walkthrough',
+  // In-page fullscreen annotate button (icon button right of the Segmented, layout-only, not OS fullscreen)
+  fsAnnotate: 'Fullscreen annotate (in-page)',
+  fsAnnotateExit: 'Exit fullscreen annotate',
   modeManual: 'Manual annotation',
   modeAuto: 'Auto walkthrough',
   /** Compare panels */
@@ -89,6 +92,16 @@ export default {
   skillPickTitle: 'Select walkthrough skills',
   skillPickDesc: 'Select one or more SkillHub skills and AI recognition will check against the skill guidelines (general rules apply if none selected).',
   skillPickEmpty: 'No skills yet. Add some in "Settings → SkillHub"',
+  /** Design re-upload modal (local file / Figma read) */
+  reupDesignTitle: 'Re-upload design',
+  reupDesignLocal: 'Upload local file',
+  reupDesignLocalHint: 'Pick an image from your computer to replace the current design',
+  reupDesignFigma: 'Read from Figma',
+  reupDesignFigmaHint: 'Fetch the frame screenshot directly via the Figma link bound to this page',
+  reupDesignNoFigmaUrl: 'No Figma link bound to this page. Add one in page settings first',
+  reupDesignNoPat: 'Figma PAT not configured. Set it in "Settings → MCP services"',
+  reupDesignFigmaBusy: 'Reading from Figma…',
+  reupDesignFigmaFail: 'Failed to read the Figma design',
   cancel: 'Cancel',
   startWalkthrough: 'Start walkthrough',
   walkWithoutSkill: 'Walk through without Skill'

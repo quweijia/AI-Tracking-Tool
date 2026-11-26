@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 export interface USelectOption {
@@ -16,6 +16,8 @@ interface Props {
   disabled?: boolean
   placeholder?: string
   title?: string
+  /** 弹层底部附加区块（如「新建项目」快捷入口），点击后关闭弹层（用于打开新建弹窗等场景） */
+  footer?: ReactNode
 }
 
 /**
@@ -23,7 +25,7 @@ interface Props {
  * 替代 macOS 原生 select 菜单，风格与整体 UI 一致；
  * 弹层用 fixed 定位，避免被抽屉/弹窗的 overflow 裁剪，空间不足时自动向上翻转。
  */
-export default function USelect({ value, onChange, options, className, disabled, placeholder, title }: Props) {
+export default function USelect({ value, onChange, options, className, disabled, placeholder, title, footer }: Props) {
   const { t } = useTranslation('uSelect')
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState<{ left: number; top: number; minWidth: number; up: boolean } | null>(null)
@@ -36,7 +38,8 @@ export default function USelect({ value, onChange, options, className, disabled,
   const openPop = () => {
     const r = btnRef.current?.getBoundingClientRect()
     if (!r) return
-    const up = r.bottom + 270 > window.innerHeight && r.top - 270 > 0
+    // 300 ≈ 弹层 max-height 270 + footer 高度，保证带 footer 时不溢出视口
+    const up = r.bottom + 300 > window.innerHeight && r.top - 300 > 0
     setPos({ left: r.left, top: up ? r.top - 6 : r.bottom + 6, minWidth: r.width, up })
     setOpen(true)
   }
@@ -124,6 +127,7 @@ export default function USelect({ value, onChange, options, className, disabled,
             ...(pos.up ? { transform: 'translateY(-100%)' } : null)
           }}
         >
+          <div className="u-select-list">
           {options.map((o) => (
             <button
               key={o.value}
@@ -144,6 +148,17 @@ export default function USelect({ value, onChange, options, className, disabled,
               )}
             </button>
           ))}
+          </div>
+          {/* footer 点击后收起弹层。必须用 onClick：若在 mousedown 阶段卸载弹层，
+              后续 click 事件因目标元素已移除 DOM 而不会派发，内部「新建项目」按钮
+              的 onClick 不执行，弹窗打不开。click 在按钮上触发（开弹窗）后冒泡到
+              此处关闭弹层；弹层 z-index 高于弹窗（弹窗内下拉需浮出），保持展开会
+              遮挡随后打开的弹窗 */}
+          {footer && (
+            <div className="u-select-footer" onClick={() => setOpen(false)}>
+              {footer}
+            </div>
+          )}
         </div>
       )}
     </span>

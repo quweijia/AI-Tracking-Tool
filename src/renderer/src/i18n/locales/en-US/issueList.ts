@@ -23,6 +23,7 @@ export default {
   locate: 'Locate',
   loading: 'Loading...',
   empty: 'No issues yet',
+  cat_prototype: 'Prototype note',
   cat_spacing: 'Spacing',
   cat_typography: 'Typography',
   cat_color: 'Color',

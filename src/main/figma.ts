@@ -172,12 +172,15 @@ async function nodeFetchOnce(
  *  init 透传标准 RequestInit（method/body/signal 等），供 AI 请求等 POST 场景复用。 */
 export async function proxyFetch(
   url: string,
-  init: RequestInit & { headers?: Record<string, string> } = {}
+  init: RequestInit & { headers?: Record<string, string> } = {},
+  /** 单次尝试的超时：本机代理对 api.figma.com 的 TLS 握手存在间歇性卡死（实测约 17% 概率），
+   *  per-attempt 超时必须显著小于外层总超时，才能在总窗口内完成重试自愈；默认 30s 兼容 AI 大响应场景 */
+  perAttemptTimeoutMs = 30000
 ): Promise<Response> {
   const strategies = proxyCandidates()
   if (cachedProxy !== undefined) {
     try {
-      return await nodeFetchOnce(url, init, cachedProxy, 30000)
+      return await nodeFetchOnce(url, init, cachedProxy, perAttemptTimeoutMs)
     } catch (err) {
       // 缓存的策略失效（如代理关闭）：清空后重新探测
       console.log('[figma:proxy] 缓存策略失效:', String(err))
@@ -191,7 +194,7 @@ export async function proxyFetch(
       try {
         if (attempt > 1) await new Promise((r) => setTimeout(r, 400))
         console.log(`[figma:proxy] 尝试:`, proxy ?? '直连', attempt > 1 ? '(重试)' : '')
-        const res = await nodeFetchOnce(url, init, proxy, 30000)
+        const res = await nodeFetchOnce(url, init, proxy, perAttemptTimeoutMs)
         console.log('[figma:proxy] 成功:', proxy ?? '直连')
         cachedProxy = proxy
         return res
@@ -300,7 +303,12 @@ export function parseFigmaUrl(url: string): { fileKey: string; nodeId: string } 
 export async function figmaApi<T>(path: string, pat: string): Promise<T> {
   let res: Response
   try {
-    res = await proxyFetch(`${FIGMA_API}${path}`, { headers: { 'X-Figma-Token': pat } })
+    res = await proxyFetch(
+      `${FIGMA_API}${path}`,
+      { headers: { 'X-Figma-Token': pat } },
+      // 单次 12s：代理 TLS 握手间歇卡死时 30s 总窗口内可完成「卡死→重试→成功」自愈，不再一击超时
+      12000
+    )
   } catch (err) {
     // proxyFetch 已经包含了代理链提示，直接包装即可
     throw new Error(

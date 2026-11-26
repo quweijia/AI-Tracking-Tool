@@ -103,7 +103,7 @@ struct ProjectCardView: View {
             VStack(alignment: .leading, spacing: Spacing.mg) {
                 HStack(spacing: Spacing.mg) {
                     ProjectLogoView(project: project, size: 40)
-                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                    VStack(alignment: .leading, spacing: Spacing.xxs) {
                         Text(project.name)
                             .font(.system(size: FontTokens.Size.sectionHeader, weight: FontTokens.Weight.semibold))
                             .foregroundStyle(Color.text)
@@ -134,7 +134,7 @@ struct FlowPlatformChips: View {
     let platforms: [Platform]
 
     var body: some View {
-        HStack(spacing: Spacing.xxs) {
+        HStack(spacing: Spacing.xs) {
             ForEach(platforms) { p in
                 PlatformBadgeView(platform: p)
             }
@@ -244,7 +244,7 @@ struct ProjectSheet: View {
             Text(p.label)
                 .font(.system(size: FontTokens.Size.captionSmall))
                 .padding(.horizontal, Spacing.mg)
-                .padding(.vertical, Spacing.xs)
+                .padding(.vertical, Spacing.xxs)
                 .background(
                     platforms.contains(p) ? Color.primarySoft : Color.fill,
                     in: Capsule()

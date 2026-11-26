@@ -5,6 +5,7 @@ export default {
   winClose: '关闭',
   winMinimize: '最小化',
   winMaximize: '最大化',
+  winRestore: '还原',
   // 设置导航
   settingsSection: '设置',
   navGeneral: '通用设置',
@@ -22,6 +23,13 @@ export default {
   navRecent: '最近访问',
   navProjects: '项目列表',
   navReports: '分析报告',
+  navTrash: '回收站',
+  // 产品模式（阶段 1：标题 / 菜单 / 占位页文案）
+  productAppName: '产品标注工具',
+  navProductAnnotation: '产品标注',
+  productHomeEmpty: '产品标注功能建设中，敬请期待',
+  switchToProduct: '切换到产品标注工具',
+  switchToWalk: '切换到AI走查工具',
   treeCollapse: '收起',
   treeExpand: '展开',
   emptyProjects: '暂无项目',
@@ -56,5 +64,16 @@ export default {
   enumerateJoin: '、',
   cancel: '取消',
   // AI 识别流式进度提示
-  progressNote: '{{sec}}s · 已接收 {{chars}}k 字'
+  progressNote: '{{sec}}s · 已接收 {{chars}}k 字',
+  // 后台任务悬浮提示（离开任务页后底部常驻）
+  bgTaskRunning: 'AI 识别进行中（{{n}} 个任务）',
+  bgTaskDone: 'AI 识别已完成',
+  bgTaskOpen: '点击查看',
+  bgTaskSelect: '选择任务',
+  bgTaskStateRunning: '进行中',
+  bgTaskStateDone: '已完成',
+  bgTaskStateFailed: '失败',
+  bgTaskUnnamed: '未命名页面',
+  bgTaskModeManual: '手动标注',
+  bgTaskModeAuto: '自动走查'
 }

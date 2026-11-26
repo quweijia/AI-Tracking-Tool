@@ -24,7 +24,7 @@ export default function ExemptResultDrawer({ items, onClose }: Props) {
               <div key={i} className="confirm-pair">
                 <div className="confirm-pair-main">
                   <div className="confirm-pair-head">
-                    <span className={`severity-badge severity-${it.severity}`}>{t('badge')}</span>
+                    <span className={`badge ${it.severity === 'major' ? 'badge-danger' : it.severity === 'minor' ? 'badge-warning' : 'badge-neutral'}`}>{t('badge')}</span>
                     <span className="confirm-pair-name" title={it.domPath ?? it.figmaNodeId ?? ''}>
                       {it.label}
                     </span>

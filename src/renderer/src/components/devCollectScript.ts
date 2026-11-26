@@ -116,6 +116,40 @@ export const getDomCollectScript = (): string => String.raw`
     return w > 0 ? Math.round(w * 100) / 100 : undefined;
   };
 
+  // Range 实测直接文本子节点的渲染包围盒（多行取并集，文档坐标），a11y 文本类标注定位用：
+  // 容器直挂文本时（flex 垂直居中 / 大 padding 等），文字实际位置 ≠ 元素包围盒，标注需落到文字处
+  const textRectOf = (el) => {
+    const texts = [];
+    for (const n of el.childNodes) {
+      if (n.nodeType === 3 && (n.textContent || '').trim()) texts.push(n);
+    }
+    if (!texts.length) return undefined;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const t of texts) {
+      let r = null;
+      try { r = document.createRange(); r.selectNodeContents(t); } catch (e) { continue; }
+      let rects = null;
+      try { rects = r.getClientRects(); } catch (e) { rects = null; }
+      if (!rects) continue;
+      for (let i = 0; i < rects.length; i++) {
+        const rc = rects[i];
+        if (rc && rc.width > 1 && rc.height > 1) {
+          x0 = Math.min(x0, rc.left);
+          y0 = Math.min(y0, rc.top);
+          x1 = Math.max(x1, rc.right);
+          y1 = Math.max(y1, rc.bottom);
+        }
+      }
+    }
+    if (x1 <= x0 || y1 <= y0) return undefined;
+    return {
+      x: Math.round((x0 + window.scrollX) * 100) / 100,
+      y: Math.round((y0 + window.scrollY) * 100) / 100,
+      width: Math.round((x1 - x0) * 100) / 100,
+      height: Math.round((y1 - y0) * 100) / 100
+    };
+  };
+
   // 有效背景色：自身背景透明时向上取最近祖先的可见背景（a11y 对比度检查用）
   const effectiveBgOf = (el) => {
     let cur = el;
@@ -207,6 +241,8 @@ export const getDomCollectScript = (): string => String.raw`
     if (text) node.text = text;
     const tcw = textContentWidthOf(el);
     if (tcw !== undefined) node.textContentWidth = tcw;
+    const trect = textRectOf(el);
+    if (trect) node.textRect = trect;
     if (textColor) node.textColor = textColor;
     const fs = num(cs.fontSize);
     if (fs !== undefined) node.fontSize = fs;

@@ -11,6 +11,10 @@ export default {
   emptyAddress: '（空）',
   domCollectFailed: '页面 DOM 采集失败',
   screenshotEmpty: '页面截图内容为空，请确认页面已加载完成',
+  scrollTopStuck: '页面无法滚动回顶部，截图已中止（页面可能禁用了滚动），请重试',
+  guestLayoutMismatch: '页面视口与设计基准宽不一致且自动校正未收敛，截图已中止，请重试',
+  captureReloaded: '页面在采集过程中重新加载，截图已中止，请重试',
+  compositorStale: '页面渲染长时间未更新，截图已中止以避免内容重复，请重试',
   notLoaded: '未加载页面',
   refresh: '刷新',
   emptyUrlHint: '输入开发环境页面 URL 后加载'

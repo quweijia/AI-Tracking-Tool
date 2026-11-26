@@ -19,6 +19,10 @@ interface Props {
   disabled?: boolean
   placeholder?: string
   title?: string
+  /** 弹层底部附加区块（如「新建文件夹」快捷入口），点击后关闭弹层（用于打开新建弹窗等场景） */
+  footer?: ReactNode
+  /** 节点右侧「+」回调（如在该文件夹下新建子文件夹）；value 为 '' 的节点（如「未分组」）不显示 */
+  onNodeCreate?: (value: string, label: string) => void
 }
 
 /** 深度优先收集含子节点的 id（初始全部展开） */
@@ -54,7 +58,9 @@ export default function UTreeSelect({
   className,
   disabled,
   placeholder,
-  title
+  title,
+  footer,
+  onNodeCreate
 }: Props) {
   const { t } = useTranslation('uSelect')
   const [open, setOpen] = useState(false)
@@ -69,7 +75,8 @@ export default function UTreeSelect({
   const openPop = () => {
     const r = btnRef.current?.getBoundingClientRect()
     if (!r) return
-    const up = r.bottom + 270 > window.innerHeight && r.top - 270 > 0
+    // 300 ≈ 弹层 max-height 270 + footer 高度，保证带 footer 时不溢出视口
+    const up = r.bottom + 300 > window.innerHeight && r.top - 300 > 0
     setPos({ left: r.left, top: up ? r.top - 6 : r.bottom + 6, minWidth: r.width, up })
     setOpen(true)
   }
@@ -163,6 +170,24 @@ export default function UTreeSelect({
               {n.icon && <span className="u-tree-icon">{n.icon}</span>}
               <span className="u-tree-label">{n.label}</span>
             </span>
+            {/* 节点级「+」：在当前文件夹下新建子文件夹。外层是 button，故用 span
+                （HTML 不允许 button 嵌套 button）；stopPropagation 防误触节点选中 */}
+            {onNodeCreate && n.value !== '' && (
+              <span
+                role="button"
+                className="u-tree-add"
+                title={t('createSubfolder', { name: n.label })}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setOpen(false)
+                  onNodeCreate(n.value, n.label)
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+              </span>
+            )}
             {n.value === value && (
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <path d="M20 6 9 17l-5-5" />
@@ -213,7 +238,17 @@ export default function UTreeSelect({
             ...(pos.up ? { transform: 'translateY(-100%)' } : null)
           }}
         >
-          {renderNodes(nodes, 0)}
+          <div className="u-select-list">{renderNodes(nodes, 0)}</div>
+          {/* footer 点击后收起弹层。必须用 onClick：若在 mousedown 阶段卸载弹层，
+              后续 click 事件因目标元素已移除 DOM 而不会派发，内部「新建文件夹」按钮
+              的 onClick 不执行，弹窗打不开。click 在按钮上触发（开弹窗）后冒泡到
+              此处关闭弹层；弹层 z-index 高于弹窗（弹窗内下拉需浮出），保持展开会
+              遮挡随后打开的弹窗 */}
+          {footer && (
+            <div className="u-select-footer" onClick={() => setOpen(false)}>
+              {footer}
+            </div>
+          )}
         </div>
       )}
     </span>

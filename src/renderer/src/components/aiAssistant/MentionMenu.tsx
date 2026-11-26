@@ -23,16 +23,24 @@ export default function MentionMenu({ projectId, pageId, query, onPick, onClose 
   const [tab, setTab] = useState<MentionTab>('project')
   const kw = query.trim().toLowerCase()
 
-  // 各类条目（现有表直查；页面/报告/问题依赖当前项目/页面，无则列表为空）
-  const projects = useLiveQuery(() => db.projects.toArray(), []) ?? []
+  // 各类条目（现有表直查；页面/报告/问题依赖当前项目/页面，无则列表为空；回收站中的不进引用列表）
+  const projects = useLiveQuery(async () => (await db.projects.toArray()).filter((p) => !p.deletedAt), []) ?? []
   const pages = useLiveQuery<WalkthroughPage[]>(
-    () => (projectId ? db.pages.where('projectId').equals(projectId).toArray() : Promise.resolve([])),
+    async () =>
+      projectId
+        ? (await db.pages.where('projectId').equals(projectId).toArray()).filter((p) => !p.deletedAt)
+        : [],
     [projectId]
   )
   const reports = useLiveQuery<ReportRecord[]>(
     () =>
       projectId
-        ? db.reportRecords.where('projectId').equals(projectId).reverse().sortBy('createdAt')
+        ? db.reportRecords
+            .where('projectId')
+            .equals(projectId)
+            .filter((r) => !r.deletedAt)
+            .reverse()
+            .sortBy('createdAt')
         : Promise.resolve([]),
     [projectId]
   )
@@ -83,12 +91,12 @@ export default function MentionMenu({ projectId, pageId, query, onPick, onClose 
 
   return (
     <div className="ai-mention-menu" onMouseDown={(e) => e.preventDefault()}>
-      <div className="ai-mention-tabs">
+      <div className="tabs tabs--pill">
         {tabs.map((x) => (
           <button
             key={x.key}
             type="button"
-            className={`ai-mention-tab${tab === x.key ? ' active' : ''}`}
+            className={`tabs-item${tab === x.key ? ' active' : ''}`}
             onClick={() => setTab(x.key)}
           >
             {x.label}

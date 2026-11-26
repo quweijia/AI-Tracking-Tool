@@ -2,13 +2,14 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { useParams, Link, useSearchParams, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { db, genId, recordVisit, touchPage, Issue, Category, Severity, TargetImage, AnnotationShape, PLATFORM_LABELS, aiAnnotationsToIssues } from '../db'
+import { db, genId, recordVisit, touchPage, deleteIssuesCascade, CATEGORY_UNSET, Issue, IssueAttachment, Category, Severity, TargetImage, AnnotationShape, PLATFORM_LABELS, aiAnnotationsToIssues } from '../db'
 import AnnotationCanvas, { NormalizedRect } from '../components/AnnotationCanvas'
 import AutoWalkPanel from '../components/AutoWalkPanel'
 import EditPageModal from '../components/EditPageModal'
 import BindSpecModal from '../components/BindSpecModal'
 import IssueEditorModal from '../components/IssueEditorModal'
 import IssueDrawer from '../components/IssueDrawer'
+import { confirmDialog } from '../components/ConfirmDialog'
 import ReverifyModal from '../components/ReverifyModal'
 import { PlatformBadge } from '../components/PlatformBadge'
 import { useAiTasksStore } from '../stores/aiTasks'
@@ -54,7 +55,7 @@ function SpecIcon() {
 }
 
 /** 工具图标（线性风格，随文字颜色继承） */
-function ToolIcon({ name }: { name: ToolValue }) {
+export function ToolIcon({ name }: { name: ToolValue }) {
   const common = {
     width: 14,
     height: 14,
@@ -141,7 +142,7 @@ function ListIcon() {
   )
 }
 
-function ExportIcon() {
+export function ExportIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <path d="M12 3v11" />
@@ -181,6 +182,15 @@ const renderOnCanvas = (i: Issue) =>
 const rgbToHex = (r: number, g: number, b: number) =>
   `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`.toUpperCase()
 
+/** 从配置中取 Figma PAT（与 AutoWalkPanel 同源逻辑：优先已启用 MCP 服务，回退旧版 figmaMcp 字段） */
+function patFromConfig(cfg: Record<string, unknown>): string {
+  const mcps = (cfg.mcps as { pat?: string; enabled?: boolean }[] | undefined) ?? []
+  const withPat = mcps.find((m) => m.enabled !== false && m.pat && m.pat.trim())
+  if (withPat) return withPat.pat!.trim()
+  const legacy = cfg.figmaMcp as { pat?: string } | undefined
+  return legacy?.pat?.trim() ?? ''
+}
+
 export default function CompareWorkbench() {
   const { t } = useTranslation('compareWorkbench')
   const { projectId, pageId } = useParams<{ projectId: string; pageId: string }>()
@@ -189,26 +199,48 @@ export default function CompareWorkbench() {
   const navigate = useNavigate()
   const page = useLiveQuery(() => db.pages.get(pageId!), [pageId])
   const project = useLiveQuery(() => db.projects.get(projectId!), [projectId])
+  /** 页面所在文件夹：横幅「返回上一级」用——页面挂在文件夹内时返回该文件夹视图，否则返回项目详情根 */
+  const parentFolder = useLiveQuery(
+    () => (page?.folderId ? db.folders.get(page.folderId) : undefined),
+    [page?.folderId]
+  )
+  /** 横幅返回链接目标与文案（文件夹已删除时兜底回项目根） */
+  const backTarget = parentFolder ? `/project/${projectId}?f=${parentFolder.id}` : `/project/${projectId}`
+  const backLabel = parentFolder?.name ?? project?.name ?? t('backToProject')
   const issues = useLiveQuery(() => db.issues.where('pageId').equals(pageId!).toArray(), [pageId])
 
   const [designUrl, setDesignUrl] = useState('')
   const [shotUrl, setShotUrl] = useState('')
   const [mode, setMode] = useState<ViewMode>('side-by-side')
   /** 工作台模式：手动标注 / 自动走查（双模式共存，切换保留各自状态）；外部跳转可经 location.state 直接进入审核（自动走查）视图 */
-  const [workMode, setWorkMode] = useState<WorkMode>(() =>
-    (location.state as { mode?: WorkMode } | null)?.mode === 'auto' ? 'auto' : 'manual'
-  )
+  const [workMode, setWorkMode] = useState<WorkMode>(() => {
+    if ((location.state as { mode?: WorkMode } | null)?.mode === 'auto') return 'auto'
+    // 打开设置等跳转会卸载本组件，按页面记忆上次的工作模式，返回本页时恢复（默认手动标注）
+    return sessionStorage.getItem(`work-mode:${projectId}/${pageId}`) === 'auto' ? 'auto' : 'manual'
+  })
   /** 自动走查设置（Figma 连接 / 开发 URL）卡片是否展开，折叠按钮在工作模式切换左侧 */
   const [walkControlsOpen, setWalkControlsOpen] = useState(true)
+  /** 页面内全屏标注：仅切换本页布局（隐藏横幅/工具栏 + body class 折叠侧边栏），不调用 Electron 系统全屏。
+   *  状态按页面记入 sessionStorage：跳转「导出报告」后返回本页仍恢复全屏；退出全屏或点返回项目即清除。 */
+  const [isAnnotateFullscreen, setIsAnnotateFullscreen] = useState<boolean>(() =>
+    sessionStorage.getItem(`annotate-fullscreen:${projectId}/${pageId}`) === '1'
+  )
   const [zoom, setZoom] = useState(1)
   const [syncScroll, setSyncScroll] = useState(true)
   /** 取色是否同步双图：开启时一次点击在设计稿与开发截图同一坐标各生成一条吸色标注 */
   const [pickerSync, setPickerSync] = useState(true)
+  /** 吸色同步取样：正在悬停一侧的上报采样点（归一化 + 来源画布），对侧画布据此镜像放大镜 */
+  const [pickerPixel, setPickerPixel] = useState<{ nx: number; ny: number; from: TargetImage } | null>(null)
   const [sliderPos, setSliderPos] = useState(50)
   /** 滑块模式：是否显示分界线（隐藏后画布分界线与调整滑杆都收起） */
   const [showDivider, setShowDivider] = useState(true)
   /** 当前标注工具，默认抓手（浏览/平移），选择标注工具后可直接绘制 */
   const [tool, setTool] = useState<ToolValue>('hand')
+  /** 吸色工具 + 同步取样开启时才镜像放大镜；关闭（切工具/关同步）时清掉残留采样点 */
+  const pickerSyncActive = pickerSync && tool === 'picker'
+  useEffect(() => {
+    if (!pickerSyncActive) setPickerPixel(null)
+  }, [pickerSyncActive])
   /** 问题清单抽屉 */
   const [drawerOpen, setDrawerOpen] = useState(false)
   // 问题清单点击卡片 → 画布上对应标注闪烁定位（约 2.2s 后自动清除）
@@ -216,6 +248,10 @@ export default function CompareWorkbench() {
   const flashTimer = useRef<number | null>(null)
   /** 聚焦查看的问题：双图放大 2x 并滚动居中到该点位，其余标注隐藏（再点一次取消） */
   const [focusIssue, setFocusIssue] = useState<Issue | null>(null)
+  // 聚焦问题被删除后（问题清单删除/编辑弹窗删除/批量清除）自动退出聚焦，避免画板残留聚焦态与顶栏聚焦条
+  useEffect(() => {
+    if (focusIssue && !(issues ?? []).some((i) => i.id === focusIssue.id)) setFocusIssue(null)
+  }, [issues, focusIssue, setFocusIssue])
   /** 编辑页面信息弹窗 */
   const [editPageOpen, setEditPageOpen] = useState(false)
   /** 绑定规范弹窗（仅绑定规范，按当前页面端类型显示分类；项目编辑在项目详情页进行） */
@@ -319,6 +355,8 @@ export default function CompareWorkbench() {
   const overlayPanelRef = useRef<HTMLDivElement>(null)
 
   // 聚焦查看（手动模式）：放大 2x，双图 / 叠加画布滚动居中到问题点位
+  // 依赖不含 zoom：聚焦期间点画板放大/缩小应正常生效，不能因 zoom 变化重跑把画布拉回 2x
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (workMode !== 'manual' || !focusIssue) return
     setZoom(2)
@@ -334,7 +372,7 @@ export default function CompareWorkbench() {
       }
     })
     return () => window.cancelAnimationFrame(raf)
-  }, [focusIssue, zoom, workMode])
+  }, [focusIssue, workMode])
 
   useEffect(() => {
     if (page?.designImagePath) {
@@ -361,6 +399,65 @@ export default function CompareWorkbench() {
         : { screenshotPath: result.relativePath, updatedAt: Date.now() }
     )
   }
+
+  // 设计稿重新上传弹窗：二选一（本地文件 / Figma 读取），error 展示在弹窗内
+  const [reupDesignOpen, setReupDesignOpen] = useState(false)
+  const [reupDesignBusy, setReupDesignBusy] = useState(false)
+  const [reupDesignErr, setReupDesignErr] = useState('')
+
+  /** 直接读取 Figma 设计稿：按页面绑定的 Figma 链接拉取画板截图，落盘替换当前设计稿 */
+  const handleFigmaReupload = async () => {
+    if (!pageId || reupDesignBusy) return
+    const figUrl = (page?.figmaUrl ?? '').trim()
+    if (!figUrl) {
+      setReupDesignErr(t('reupDesignNoFigmaUrl'))
+      return
+    }
+    setReupDesignBusy(true)
+    setReupDesignErr('')
+    try {
+      const cfg = await window.electronAPI.getConfig()
+      const pat = patFromConfig(cfg)
+      if (!pat) {
+        setReupDesignErr(t('reupDesignNoPat'))
+        return
+      }
+      const fig = await window.electronAPI.figmaFetchDesign({ pat, figmaUrl: figUrl })
+      if (!fig.ok || !fig.data?.screenshotDataUrl) {
+        setReupDesignErr(fig.message || t('reupDesignFigmaFail'))
+        return
+      }
+      const buf = await (await fetch(fig.data.screenshotDataUrl)).arrayBuffer()
+      const relPath = await window.electronAPI.saveImage(buf, 'png')
+      const oldPath = page?.designImagePath
+      if (oldPath && oldPath !== relPath) {
+        await window.electronAPI.deleteImage(oldPath).catch(() => undefined)
+      }
+      await db.pages.update(pageId, { designImagePath: relPath, updatedAt: Date.now() })
+      setReupDesignOpen(false)
+    } catch (e) {
+      setReupDesignErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setReupDesignBusy(false)
+    }
+  }
+
+  // 后台任务悬浮入口跳转：?view=auto|manual 显式指定进入的工作模式（同页面内切换模式不会卸载
+  // 组件，必须靠 query 通知，否则会停留在上次记忆的模式）；消费后立即从 URL 移除，
+  // 保证用户手动切换模式后再次跳转仍能触发
+  const viewParam = searchParams.get('view')
+  useEffect(() => {
+    if (viewParam !== 'auto' && viewParam !== 'manual') return
+    setWorkMode(viewParam)
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('view')
+        return next
+      },
+      { replace: true }
+    )
+  }, [viewParam, setSearchParams])
 
   // 从问题清单「定位」跳转：?issue=<id>，打开对应编辑弹窗
   const focusIssueId = searchParams.get('issue')
@@ -399,6 +496,97 @@ export default function CompareWorkbench() {
       setSpaceHeld(false)
     }
   }, [])
+
+  // ===== 页面内全屏标注（仅本页布局切换，禁止调用 Electron 系统全屏 API） =====
+  const toggleAnnotateFullscreen = () =>
+    setIsAnnotateFullscreen((v) => {
+      console.log(`[FULLSCREEN_ANNOTATE] ${!v ? 'enter' : 'exit'}`)
+      return !v
+    })
+
+  // 全屏期间给 body 挂 class 折叠左侧侧边栏（纯 CSS 显隐，不改持久化折叠态），退出/离开页面自动还原
+  useEffect(() => {
+    if (!isAnnotateFullscreen) return
+    document.body.classList.add('annotate-fullscreen')
+    return () => document.body.classList.remove('annotate-fullscreen')
+  }, [isAnnotateFullscreen])
+
+  // 全屏状态同步到 sessionStorage（按页面隔离）：导出报告跳转后返回本页时经 state 初始化恢复全屏；
+  // 退出全屏即清除记录；全屏状态下经非返回项目入口离开页面则保留记录，回到本页仍恢复
+  useEffect(() => {
+    const key = `annotate-fullscreen:${projectId}/${pageId}`
+    if (isAnnotateFullscreen) sessionStorage.setItem(key, '1')
+    else sessionStorage.removeItem(key)
+  }, [isAnnotateFullscreen, projectId, pageId])
+
+  // 工作模式同步到 sessionStorage（按页面隔离）：打开设置等跳转离开后返回本页，恢复上次的工作模式（自动走查/手动标注）
+  useEffect(() => {
+    sessionStorage.setItem(`work-mode:${projectId}/${pageId}`, workMode)
+  }, [workMode, projectId, pageId])
+
+  // 全屏态 ESC 退出（输入类元素聚焦时让位，不劫持画布快捷键与弹窗内的 ESC）
+  useEffect(() => {
+    if (!isAnnotateFullscreen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const el = e.target as HTMLElement | null
+      if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return
+      console.log('[FULLSCREEN_ANNOTATE] exit via ESC')
+      setIsAnnotateFullscreen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isAnnotateFullscreen])
+
+  // 聚焦查看 ESC 退出（清单卡片点击聚焦后）：全屏态让位（先退全屏再退聚焦），输入类元素
+  // 聚焦与任一弹窗打开时不劫持（.modal-mask 兜底覆盖 confirmDialog 等动态弹窗）
+  useEffect(() => {
+    if (!focusIssue) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const el = e.target as HTMLElement | null
+      if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return
+      if (
+        isAnnotateFullscreen ||
+        editingIssue ||
+        creating ||
+        reverifyIssue ||
+        editPageOpen ||
+        bindSpecOpen ||
+        reupDesignOpen ||
+        skillPickOpen ||
+        runningConfirmOpen ||
+        document.querySelector('.modal-mask')
+      )
+        return
+      setFocusIssue(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [
+    focusIssue,
+    isAnnotateFullscreen,
+    editingIssue,
+    creating,
+    reverifyIssue,
+    editPageOpen,
+    bindSpecOpen,
+    reupDesignOpen,
+    skillPickOpen,
+    runningConfirmOpen
+  ])
+
+  // 布局切换后画布容器尺寸变化：派发 resize 兜底触发依赖窗口尺寸的逻辑重算，并打印容器实测尺寸便于排查坐标偏移
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      window.dispatchEvent(new Event('resize'))
+      const rect = document.querySelector('.compare-body')?.getBoundingClientRect()
+      console.log(
+        `[FULLSCREEN_ANNOTATE] mode=${isAnnotateFullscreen ? 'fullscreen' : 'normal'} canvas=${Math.round(rect?.width ?? 0)}x${Math.round(rect?.height ?? 0)}`
+      )
+    }, 220)
+    return () => window.clearTimeout(timer)
+  }, [isAnnotateFullscreen])
 
   const handleScroll = (source: 'design' | 'shot') => {
     if (!syncScroll || mode !== 'side-by-side') return
@@ -527,6 +715,7 @@ export default function CompareWorkbench() {
     status: Issue['status']
     targetImage: Issue['targetImage']
     color?: string
+    attachments?: IssueAttachment[]
   }) => {
     if (!creating || !pageId) return
     const issue: Issue = {
@@ -543,6 +732,7 @@ export default function CompareWorkbench() {
       category: fields.category,
       status: 'pending',
       color: fields.color,
+      attachments: fields.attachments,
       createdAt: Date.now()
     }
     await db.issues.add(issue)
@@ -559,9 +749,13 @@ export default function CompareWorkbench() {
     targetImage: Issue['targetImage']
     color?: string
     measureValue?: string
+    attachments?: IssueAttachment[]
   }) => {
     if (!editingIssue) return
-    const confirmed = editingIssue.isAISuggested && !editingIssue.aiConfirmed ? { aiConfirmed: true } : {}
+    // 候选编辑保存即转正式；备选问题转正式时同时置 optionalChecked 生成画布标注（单条采纳为唯一确认入口）
+    const confirmed = editingIssue.isAISuggested && !editingIssue.aiConfirmed
+      ? { aiConfirmed: true, ...(editingIssue.level === 'optional' ? { optionalChecked: true } : {}) }
+      : {}
     const after: Issue = { ...editingIssue, ...fields, ...confirmed }
     await db.issues.update(editingIssue.id, { ...fields, ...confirmed })
     pushHistory({ type: 'update', before: editingIssue, after })
@@ -570,8 +764,8 @@ export default function CompareWorkbench() {
   }
 
   // ===== 快速创建（不弹窗）：测量距离 / 吸色取样 =====
-  // 吸色离屏画布缓存：url → 已绘制的离屏 canvas（点击时同步取双图像素）
-  const sampleCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map())
+  // 吸色整图像素缓存：url → { 尺寸, ImageData 数组 }（一次性读取，取色只查数组）
+  const sampleCacheRef = useRef<Map<string, { w: number; h: number; data: Uint8ClampedArray }>>(new Map())
   useEffect(() => {
     ;[designUrl, shotUrl].forEach((url) => {
       if (!url || sampleCacheRef.current.has(url)) return
@@ -581,25 +775,30 @@ export default function CompareWorkbench() {
         const canvas = document.createElement('canvas')
         canvas.width = img.naturalWidth
         canvas.height = img.naturalHeight
-        canvas.getContext('2d', { willReadFrequently: true })?.drawImage(img, 0, 0)
-        sampleCacheRef.current.set(url, canvas)
+        const ctx = canvas.getContext('2d', { willReadFrequently: true })
+        if (!ctx) return
+        try {
+          ctx.drawImage(img, 0, 0)
+          sampleCacheRef.current.set(url, {
+            w: canvas.width,
+            h: canvas.height,
+            data: ctx.getImageData(0, 0, canvas.width, canvas.height).data
+          })
+        } catch {
+          /* 跨域图片取不到像素时跳过 */
+        }
       }
     })
   }, [designUrl, shotUrl])
 
-  /** 在指定图片上取归一化坐标处的像素色（hex），画布未就绪返回 null */
+  /** 在指定图片上取归一化坐标处的像素色（hex），缓存未就绪返回 null */
   const sampleColorAt = (url: string, nx: number, ny: number): string | null => {
-    const canvas = sampleCacheRef.current.get(url)
-    const ctx = canvas?.getContext('2d', { willReadFrequently: true })
-    if (!canvas || !ctx || !canvas.width || !canvas.height) return null
-    const px = Math.min(canvas.width - 1, Math.max(0, Math.round(nx * canvas.width)))
-    const py = Math.min(canvas.height - 1, Math.max(0, Math.round(ny * canvas.height)))
-    try {
-      const d = ctx.getImageData(px, py, 1, 1).data
-      return rgbToHex(d[0], d[1], d[2])
-    } catch {
-      return null
-    }
+    const entry = sampleCacheRef.current.get(url)
+    if (!entry || !entry.w || !entry.h) return null
+    const px = Math.min(entry.w - 1, Math.max(0, Math.round(nx * entry.w)))
+    const py = Math.min(entry.h - 1, Math.max(0, Math.round(ny * entry.h)))
+    const o = (py * entry.w + px) * 4
+    return rgbToHex(entry.data[o], entry.data[o + 1], entry.data[o + 2])
   }
 
   const handleQuickCreate = async (
@@ -700,7 +899,7 @@ export default function CompareWorkbench() {
   const handleDelete = async () => {
     if (!editingIssue) return
     pushHistory({ type: 'delete', issues: [editingIssue] })
-    await db.issues.delete(editingIssue.id)
+    await deleteIssuesCascade([editingIssue])
     void touchPage(editingIssue.pageId)
     setEditingIssue(null)
   }
@@ -776,12 +975,12 @@ export default function CompareWorkbench() {
     )
     if (
       candidates.length > 0 &&
-      !window.confirm(t('aiOverwriteConfirm', { n: candidates.length }))
+      !(await confirmDialog({ message: t('aiOverwriteConfirm', { n: candidates.length }), tone: 'danger' }))
     ) {
       return
     }
     // 注册后台任务：切换页面不影响识别，返回页面时从这里恢复状态；同页可再次点击并行发起
-    const taskId = useAiTasksStore.getState().start(pageId, page?.pageName ?? '')
+    const taskId = useAiTasksStore.getState().start(pageId!, projectId!, page?.pageName ?? '', workMode)
     setAiMsg(null)
     try {
       // 多选技能说明作为走查指引注入请求（Zip 导入的指南文档一并注入，超长截断）
@@ -866,14 +1065,15 @@ export default function CompareWorkbench() {
 
   return (
     <div className="page compare-page">
-      {/* 顶部横幅：返回项目 + 页面名 + 元信息 + 右上操作 + AI 插图（与其他页面横幅统一） */}
+      {/* 顶部横幅：返回上一级（页面在文件夹内时返回该文件夹视图，否则返回项目详情）+ 页面名 + 元信息 + 右上操作 + AI 插图（与其他页面横幅统一）；页面内全屏标注模式隐藏以最大化画布 */}
+      {!isAnnotateFullscreen && (
       <div className="rv2-hero detail-hero">
         <div className="rv2-hero-main">
-          <Link to={`/project/${projectId}`} className="back-link">
+          <Link to={backTarget} className="back-link" draggable={false}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M15 18l-6-6 6-6" />
             </svg>
-            {project?.name ?? t('backToProject')}
+            {backLabel}
           </Link>
           <h1 className="rv2-title detail-title">
             <span className="detail-title-text">{page?.pageName ?? '...'}</span>
@@ -889,7 +1089,7 @@ export default function CompareWorkbench() {
           <div className="detail-meta">
             {page && <PlatformBadge platform={page.platform} />}
             {page?.figmaUrl && (
-              <a className="figma-link" href={page.figmaUrl} target="_blank" rel="noreferrer" title={page.figmaUrl}>
+              <a className="figma-link" href={page.figmaUrl} target="_blank" rel="noreferrer" title={page.figmaUrl} draggable={false}>
                 <LinkIcon />
                 <span>{t('figmaDesign')}</span>
               </a>
@@ -934,7 +1134,7 @@ export default function CompareWorkbench() {
             <ListIcon />
             {t('issueList')}
           </button>
-          <Link to={`/project/${projectId}/page/${pageId}/export`} className="btn-primary">
+          <Link to={`/project/${projectId}/page/${pageId}/export`} className="btn-primary" draggable={false}>
             <ExportIcon />
             {t('exportReport')}
           </Link>
@@ -942,6 +1142,7 @@ export default function CompareWorkbench() {
         <img className="rv2-hero-art" src={heroBannerArtUrl} alt={t('aiArtAlt')} draggable={false} />
         <img className="rv2-hero-art-dark" src={heroBannerArtDarkUrl} alt="" draggable={false} />
       </div>
+      )}
 
       {aiMsg && (
         <p className={`ai-msg ${aiMsg.ok ? 'ok' : 'err'}`}>
@@ -980,6 +1181,24 @@ export default function CompareWorkbench() {
       )}
 
       <div className="workbench-header">
+        {/* 全屏标注模式：头部左侧 = 返回项目按钮 + 当前页面标题；点击返回属明确退出，清除全屏记录避免返回时误恢复 */}
+        {isAnnotateFullscreen && (
+          <div className="fs-head-left">
+            <Link
+              to={backTarget}
+              className="seg-icon-btn"
+              title={t('backToProject')}
+              aria-label={t('backToProject')}
+              draggable={false}
+              onClick={() => sessionStorage.removeItem(`annotate-fullscreen:${projectId}/${pageId}`)}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+            </Link>
+            <span className="fs-page-title">{page?.pageName ?? '...'}</span>
+          </div>
+        )}
         <div className="workbench-tools">
           {workMode === 'manual' && (
             <>
@@ -1041,6 +1260,14 @@ export default function CompareWorkbench() {
               </div>
             </>
           )}
+          {workMode === 'auto' && aiRunningCount > 0 && (
+            /* AI 识别进行中提示：与「收起设置」按钮同一行，按钮左侧显示（原在自动走查设置卡片内的消息条） */
+            <span className="walk-running-hint">{t('aiTaskRunning', { ns: 'autoWalkPanel' })}</span>
+          )}
+          {workMode === 'auto' && (
+            /* 自动走查消息槽：正在采集/采集完成等通知由 AutoWalkPanel 经 Portal 渲染到此处（「展开设置」按钮左侧，不再单独占一行） */
+            <div id="walk-msg-slot" className="walk-msg-slot" />
+          )}
           {workMode === 'auto' && (
             <button
               type="button"
@@ -1054,6 +1281,7 @@ export default function CompareWorkbench() {
               {walkControlsOpen ? t('collapseSettings') : t('expandSettings')}
             </button>
           )}
+          {/* 工作模式切换 + 页面内全屏标注按钮（Segmented 右侧，随工具行右对齐） */}
           <div className="segmented work-mode-switch" title={t('workModeSwitchTitle')}>
             {(['manual', 'auto'] as const).map((m) => (
               <button
@@ -1066,6 +1294,68 @@ export default function CompareWorkbench() {
               </button>
             ))}
           </div>
+          {/* 全屏标注模式：横幅右上操作以图标按钮形式并入工具行（Segmented 与全屏按钮之间），行为与横幅内一致 */}
+          {isAnnotateFullscreen && (
+            <>
+              <button
+                className={`seg-icon-btn${aiRunningCount ? ' loading' : ''}`}
+                onClick={() => (aiRunningCount ? setRunningConfirmOpen(true) : setSkillPickOpen(true))}
+                disabled={!aiModel || (workMode === 'manual' && (!designUrl || !shotUrl))}
+                title={
+                  !aiModel
+                    ? t('aiTitleNoModel')
+                    : workMode === 'auto'
+                      ? t('aiTitleAuto')
+                      : !designUrl || !shotUrl
+                        ? t('aiTitleNeedImages')
+                        : t('aiTitleManual')
+                }
+              >
+                <SparklesIcon />
+              </button>
+              <button
+                className={`seg-icon-btn${drawerOpen ? ' active' : ''}`}
+                onClick={() => setDrawerOpen(!drawerOpen)}
+                title={t('issueList')}
+              >
+                <ListIcon />
+              </button>
+              <Link
+                to={`/project/${projectId}/page/${pageId}/export`}
+                className="seg-icon-btn"
+                title={t('exportReport')}
+                draggable={false}
+              >
+                <ExportIcon />
+              </Link>
+            </>
+          )}
+          <button
+            type="button"
+            className="seg-icon-btn"
+            onClick={toggleAnnotateFullscreen}
+            title={isAnnotateFullscreen ? t('fsAnnotateExit') : t('fsAnnotate')}
+            aria-label={isAnnotateFullscreen ? t('fsAnnotateExit') : t('fsAnnotate')}
+          >
+            {/* 展开/收起图标：全屏激活时切换为收起样式 */}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              {isAnnotateFullscreen ? (
+                <>
+                  <path d="M4 14h6v6" />
+                  <path d="m3 21 7-7" />
+                  <path d="M20 10h-6V4" />
+                  <path d="m14 10 7-7" />
+                </>
+              ) : (
+                <>
+                  <path d="M15 3h6v6" />
+                  <path d="m21 3-7 7" />
+                  <path d="M9 21H3v-6" />
+                  <path d="m3 21 7-7" />
+                </>
+              )}
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -1147,9 +1437,9 @@ export default function CompareWorkbench() {
         ) : (
           <div className="compare-container">
             <div className="compare-panel card">
-              <div className="panel-title">
+              <div className="panel-title cw-panel-title">
                 {t('panelDesign')}
-                <span className="panel-count">{t('annotationCount', { n: designIssues.length })}</span>
+                <span className="count count-accent panel-count">{t('annotationCount', { n: designIssues.length })}</span>
                 <span className="panel-hist">
                   <button
                     type="button"
@@ -1180,7 +1470,10 @@ export default function CompareWorkbench() {
                 </span>
                 <button
                   className="panel-upload"
-                  onClick={() => handleReupload('design')}
+                  onClick={() => {
+                    setReupDesignErr('')
+                    setReupDesignOpen(true)
+                  }}
                   title={t('reuploadDesignTitle')}
                 >
                   {t('reupload')}
@@ -1211,15 +1504,17 @@ export default function CompareWorkbench() {
                       onEdit={(issue) => setEditingIssue(issue)}
                       flashId={flashId}
                       focusId={focusIssue?.id ?? null}
+                      mirrorLoupe={pickerSyncActive && pickerPixel?.from === 'screenshot' ? pickerPixel : null}
+                      onPickerPixel={pickerSyncActive ? (p) => setPickerPixel(p ? { ...p, from: 'design' } : null) : undefined}
                     />
                   </div>
                 )}
               </div>
             </div>
             <div className="compare-panel card">
-              <div className="panel-title">
+              <div className="panel-title cw-panel-title">
                 {t('panelShot')}
-                <span className="panel-count">{t('annotationCount', { n: shotIssues.length })}</span>
+                <span className="count count-accent panel-count">{t('annotationCount', { n: shotIssues.length })}</span>
                 <span className="panel-hist">
                   <button
                     type="button"
@@ -1281,6 +1576,8 @@ export default function CompareWorkbench() {
                       onEdit={(issue) => setEditingIssue(issue)}
                       flashId={flashId}
                       focusId={focusIssue?.id ?? null}
+                      mirrorLoupe={pickerSyncActive && pickerPixel?.from === 'design' ? pickerPixel : null}
+                      onPickerPixel={pickerSyncActive ? (p) => setPickerPixel(p ? { ...p, from: 'screenshot' } : null) : undefined}
                     />
                   </div>
                 )}
@@ -1297,6 +1594,7 @@ export default function CompareWorkbench() {
             onReverify={openReverify}
             onAdd={workMode === 'auto' ? undefined : handleQuickAdd}
             onClose={() => setDrawerOpen(false)}
+            specMenuOn={specMenuOn}
           />
         )}
       </div>
@@ -1347,7 +1645,7 @@ export default function CompareWorkbench() {
             height: creating.rect.height,
             description: '',
             severity: 'minor',
-            category: 'spacing',
+            category: CATEGORY_UNSET,
             status: 'pending',
             createdAt: 0
           }}
@@ -1393,6 +1691,40 @@ export default function CompareWorkbench() {
           onDone={() => setBindSpecOpen(false)}
           onCancel={() => setBindSpecOpen(false)}
         />
+      )}
+
+      {/* 设计稿重新上传：选择本地文件或直接读取 Figma 设计稿 */}
+      {reupDesignOpen && (
+        <div className="modal-mask" onClick={() => !reupDesignBusy && setReupDesignOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>{t('reupDesignTitle')}</h3>
+            <div className="reup-opts">
+              <button
+                type="button"
+                className="reup-opt"
+                disabled={reupDesignBusy}
+                onClick={() => {
+                  setReupDesignOpen(false)
+                  void handleReupload('design')
+                }}
+              >
+                <span className="reup-opt-name">{t('reupDesignLocal')}</span>
+                <span className="reup-opt-hint">{t('reupDesignLocalHint')}</span>
+              </button>
+              <button
+                type="button"
+                className="reup-opt"
+                disabled={reupDesignBusy}
+                onClick={() => void handleFigmaReupload()}
+              >
+                <span className="reup-opt-name">{t('reupDesignFigma')}</span>
+                <span className="reup-opt-hint">{t('reupDesignFigmaHint')}</span>
+              </button>
+            </div>
+            {reupDesignBusy && <p className="reup-err">{t('reupDesignFigmaBusy')}</p>}
+            {reupDesignErr && <p className="reup-err">{reupDesignErr}</p>}
+          </div>
+        </div>
       )}
 
       {skillPickOpen && (

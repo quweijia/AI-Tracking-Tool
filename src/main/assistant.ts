@@ -181,7 +181,7 @@ function registerAssistantHandlers(): void {
             const t = line.trim()
             if (!t.startsWith('data:')) continue
             const { delta, reasoning } = sseDelta(t.slice(5).trim())
-            if (reasoning) send({ reasoning })
+            if (reasoning) send({ delta: '', reasoning })
             if (delta) {
               content += delta
               send({ delta })

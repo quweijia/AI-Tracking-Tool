@@ -34,6 +34,10 @@ export default {
   'page.issueSummary': '共 {{total}} 个，待修复 {{pending}} 个',
   'page.interactiveNote':
     '报告为交互式：研发可在报告内点击图上标注查看详情、回应「已修复 / 无法修复（原因）」，全部回应后可在报告内一键导出研发修改报告。',
+  // 备选参考问题（P3）导出开关：默认不导出；开启后仅收录清单中已勾选的备选项
+  'page.includeOptional': '导出备选参考问题（已勾选 {{checked}} / 共 {{total}} 条）',
+  'page.includeOptionalTip':
+    '备选参考问题（P3，如无障碍对比度、组件缺失等易误判项）默认不写入报告；开启后仅收录清单中已勾选的备选项，HTML 报告与在线文档口径一致。',
   'page.exporting': '导出中...',
   'page.exportHtmlBtn': '导出 HTML 报告',
   'page.creating': '创建中...',
@@ -49,10 +53,9 @@ export default {
   'page.viewReportTip': '点击查看报告',
   'page.totalIssues': '共 {{n}} 个问题',
   'page.deleteRecordTip': '删除记录',
-  'page.openFolderTip': '打开所在文件夹',
-  'page.confirmDeleteRecord': '确认删除该导出记录？对应的本地报告文件将一并移入废纸篓。',
+  'page.confirmDeleteRecord': '确认删除该导出记录？删除后将移入回收站，保留期内可还原。',
   'page.confirmAccept':
-    '确认将页面「{{name}}」标记为验收通过吗？\n分析报告列表中该页面的状态将显示为「已完成」。',
+    '确认将页面「{{name}}」标记为验收通过吗？\n分析报告列表中该页面的状态将显示为「已完成」，该页面的标注将同步置为「已修复」。',
   'page.confirmRevokeAccept':
     '确认取消页面「{{name}}」的验收状态吗？\n分析报告列表中该页面的状态将恢复为「进行中」。',
   'page.unreviewedTitle': '存在未审核的 AI 候选标注',
@@ -130,6 +133,7 @@ export default {
   'exportedHtml.detailColor': '取样色值',
   'exportedHtml.detailSize': '标注尺寸',
   'exportedHtml.detailSkill': '命中技能',
+  'exportedHtml.detailAttachments': '截图附件',
   'exportedHtml.blockPlaceholder': '请填写无法修复的原因（必填），如：接口暂不支持、下版本处理等',
   'exportedHtml.submit': '提交',
   'exportedHtml.presetRecheckPassed': '（工具内复验已通过）',

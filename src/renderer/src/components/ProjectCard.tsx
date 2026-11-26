@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { db, IssueStatus, Project, platformList } from '../db'
 import { tr } from '../i18n'
 import { PlatformBadge } from './PlatformBadge'
+import { Skeleton } from './Skeleton'
 
 /** 已解决问题状态（与问题清单「已解决」筛选口径一致） */
 const RESOLVED_STATUSES: IssueStatus[] = ['fixed', 'ignored', 'design-confirmed']
@@ -32,12 +33,12 @@ export const logoColorOf = (id: string) => {
 /** 文字 Logo 实际底色：自选色优先，否则按 id 散列 */
 export const logoBgOf = (p: Pick<Project, 'id' | 'logoColor'>) => p.logoColor || logoColorOf(p.id)
 
-/** 项目 Logo 头像：有图显示图片，无图显示名称首字符（与项目详情页样式一致） */
+/** 项目 Logo 头像：有图显示图片，无图显示名称首字符（与项目详情页样式一致；结构化类型，产品项目可复用） */
 export function ProjectLogo({
   project,
   size = 36
 }: {
-  project: Project
+  project: Pick<Project, 'id' | 'name' | 'logoPath' | 'logoColor'>
   size?: number
 }) {
   const [url, setUrl] = useState('')
@@ -78,8 +79,8 @@ export function ProjectLogo({
 /** 项目聚合统计：文件夹数 / 页面数 / 标注解决进度 / 最近更新 */
 export function useProjectStats(projectId: string) {
   return useLiveQuery(async () => {
-    const folders = await db.folders.where('projectId').equals(projectId).toArray()
-    const pages = await db.pages.filter((p) => p.projectId === projectId).toArray()
+    const folders = (await db.folders.where('projectId').equals(projectId).toArray()).filter((f) => !f.deletedAt)
+    const pages = (await db.pages.filter((p) => p.projectId === projectId).toArray()).filter((p) => !p.deletedAt)
     const issues = pages.length
       ? await db.issues.where('pageId').anyOf(pages.map((p) => p.id)).toArray()
       : []
@@ -99,15 +100,15 @@ export function useProjectStats(projectId: string) {
 
 function ProgressBlock({ stats }: { stats: ReturnType<typeof useProjectStats> }) {
   const { t } = useTranslation('projectCard')
-  // 统计未加载时保持 0%：进入页面后进度条从 0 平滑涨到当前进度（而不是从 100% 缩回）
-  const pct = !stats ? 0 : stats.total === 0 ? 100 : Math.round((stats.resolved / stats.total) * 100)
+  // 统计未加载时保持 0%：进入页面后进度条从 0 平滑涨到当前进度（而不是从 100% 缩回）；无标注（0/0）也显示 0%
+  const pct = !stats ? 0 : stats.total === 0 ? 0 : Math.round((stats.resolved / stats.total) * 100)
   return (
     <div className="card-progress">
       <div className="progress-text">
         <span>
           {stats
             ? t('resolvedAnnotations', { resolved: stats.resolved, total: stats.total })
-            : t('loading')}
+            : <Skeleton width={140} height={12} />}
         </span>
         <span>{stats ? `${pct}%` : ''}</span>
       </div>
@@ -158,7 +159,7 @@ export function ProjectCard({ project, dnd }: { project: Project; dnd?: CardDnd 
 export function ProjectRow({ project, dnd }: { project: Project; dnd?: CardDnd }) {
   const { t } = useTranslation('projectCard')
   const stats = useProjectStats(project.id)
-  const pct = !stats ? 0 : stats.total === 0 ? 100 : Math.round((stats.resolved / stats.total) * 100)
+  const pct = !stats ? 0 : stats.total === 0 ? 0 : Math.round((stats.resolved / stats.total) * 100)
 
   return (
     <Link
@@ -179,7 +180,7 @@ export function ProjectRow({ project, dnd }: { project: Project; dnd?: CardDnd }
         </span>
         {stats
           ? t('resolvedWithPct', { resolved: stats.resolved, total: stats.total, pct })
-          : t('loading')}
+          : <Skeleton width={120} height={12} />}
       </span>
       <span className="row-counts">
         {stats ? t('folderPageCountRow', { folders: stats.folderCount, pages: stats.pageCount }) : ''}

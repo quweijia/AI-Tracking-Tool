@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie'
-import type { IssueSource, ParsedToken, SpecDegradation, TokenType, TokenKind, TokenSource } from '../../../shared/types'
+import type { IssueLevel, IssueSource, ParsedToken, SpecDegradation, TokenType, TokenKind, TokenSource } from '../../../shared/types'
 import { extractFigmaFileKey } from '../../../shared/figmaUrl'
 
 export type Platform = 'h5' | 'pc' | 'dashboard' | 'electron'
@@ -7,6 +7,7 @@ export type PageStatus = 'pending' | 'reviewing' | 'completed'
 export type IssueStatus = 'pending' | 'in-progress' | 'fixed' | 'ignored' | 'design-confirmed'
 export type Severity = 'suggestion' | 'minor' | 'major'
 export type Category =
+  | 'prototype'
   | 'spacing'
   | 'typography'
   | 'color'
@@ -14,6 +15,8 @@ export type Category =
   | 'missing-component'
   | 'interaction'
   | 'compatibility'
+/** 分类「未选择」哨兵（空串）：仅创建/编辑弹窗内表示待手动选择，保存前必须选择，不会以此值落库 */
+export const CATEGORY_UNSET = '' as unknown as Category
 export type TargetImage = 'design' | 'screenshot'
 /** 标注形状：框选 / 点位 / 箭头 / 文字 / 测量距离 / 吸色取样（旧数据无 shape 字段，默认按 rect 渲染） */
 export type AnnotationShape = 'rect' | 'point' | 'arrow' | 'text' | 'measure' | 'picker'
@@ -22,7 +25,25 @@ export type AnnotationShape = 'rect' | 'point' | 'arrow' | 'text' | 'measure' | 
 export const bySort = <T extends { sortNo?: number; createdAt: number }>(a: T, b: T) =>
   (a.sortNo ?? a.createdAt) - (b.sortNo ?? b.createdAt)
 
-export interface Project {
+/** 回收站所属模式：走查 / 产品标注（两库天然隔离，标记用于还原时校验，防跨模式还原） */
+export type TrashMode = 'walk' | 'product'
+
+/**
+ * 软删除（回收站）公共字段：可选非索引字段，仅打标记隐藏，记录与磁盘文件保留。
+ * 旧数据无这些字段时按「未删除」处理，读取处统一以 `!deletedAt` 过滤，不做迁移、不报错。
+ */
+export interface SoftDeleteFields {
+  /** 软删除时间戳；缺省/null = 未删除 */
+  deletedAt?: number | null
+  /** 删除前的父级 id（文件夹用 parentId，页面/标注集用 folderId；项目无父级恒为 null） */
+  originalParentId?: string | null
+  /** 删除前在父级内的排序位置（sortNo），还原时插回原位 */
+  restoreOrder?: number | null
+  /** 记录所属模式，防止跨模式还原 */
+  deletedInMode?: TrashMode
+}
+
+export interface Project extends SoftDeleteFields {
   id: string
   name: string
   /** 适用端类型（可多选；旧数据为单选字符串，读取时用 platformList 归一化） */
@@ -38,7 +59,7 @@ export interface Project {
 }
 
 /** 分组文件夹：项目内与页面并列展示，支持多层嵌套（parentId 缺省挂项目根级） */
-export interface Folder {
+export interface Folder extends SoftDeleteFields {
   id: string
   projectId: string
   /** 父文件夹 id（缺省为项目根级） */
@@ -53,7 +74,7 @@ export interface Folder {
   createdAt: number
 }
 
-export interface WalkthroughPage {
+export interface WalkthroughPage extends SoftDeleteFields {
   id: string
   /** 所属分组文件夹（可选，缺省直接挂在项目根级与文件夹并列展示） */
   folderId?: string
@@ -70,6 +91,11 @@ export interface WalkthroughPage {
   walkDesignPath?: string
   /** 自动走查独立双图：开发页面采集截图（与手动上传的开发截图隔离） */
   walkShotPath?: string
+  /** 走查设计稿是否为手动上传（Figma 网络受限/未配置时跳过 Figma 拉取，采集尺寸取上传图原始尺寸） */
+  walkDesignManual?: boolean
+  /** 手动上传设计稿的采集视口宽度（弹性布局页面元素宽度随窗口宽变化，与上传图像素宽不一致时
+   *  手动指定实际浏览窗口内容宽度；缺省按上传图原始像素宽采集） */
+  walkViewportWidth?: number
   status: PageStatus
   /** 侧边栏树状菜单手动排序值（拖拽生成，小值在前），缺省按创建时间 */
   sortNo?: number
@@ -89,8 +115,9 @@ export interface Visit {
   visitedAt: number
 }
 
-/** 导出历史记录（HTML 报告 / 飞书文档），为后续推送项目管理工具预留 */
-export interface ReportRecord {
+/** 导出历史记录（HTML 报告 / 飞书文档），为后续推送项目管理工具预留。
+ *  支持软删进回收站：走查/产品导出页删除记录仅打标记隐藏，保留期内可还原 */
+export interface ReportRecord extends SoftDeleteFields {
   id: string
   pageId: string
   projectId: string
@@ -103,6 +130,24 @@ export interface ReportRecord {
   filePath?: string
   /** 导出时的问题统计 */
   total: number
+  createdAt: number
+}
+
+/** 标注截图附件：原图落盘 userData/attachments/<pageId>/，库内仅存相对路径 + 列表缩略图（不进 IndexedDB 大字段） */
+export interface IssueAttachment {
+  id: string
+  /** 来源：本地上传 / 截图采集（阶段2）/ 剪贴板粘贴 */
+  source: 'local' | 'capture' | 'clipboard'
+  /** 展示用文件名（重名时 UI 追加序号，不参与落盘命名） */
+  fileName: string
+  /** 相对 walkthrough-data 根的原图路径（复用 file:readImage 解析） */
+  relPath: string
+  width: number
+  height: number
+  /** 原图字节数（上传/落盘时校验与展示） */
+  size: number
+  /** 列表缩略图（canvas 生成 webp，最长边 240px），详情预览走原图 */
+  thumbDataUrl: string
   createdAt: number
 }
 
@@ -142,6 +187,12 @@ export interface Issue {
   domPath?: string
   /** 结构化比对回溯：匹配置信度 0~1 */
   matchConfidence?: number
+  /** 问题分级（仅自动走查写入）：required=必标（默认生成画布标注）；optional=备选参考（默认不标注，勾选后生效）。缺省视为 required，兼容历史数据 */
+  level?: IssueLevel
+  /** 分级判定理由（AI 给出或兜底规则生成） */
+  levelReason?: string
+  /** 备选问题是否已被用户勾选加入标注（勾选后画布生成标注，随导出开关进报告） */
+  optionalChecked?: boolean
   /** AI 结构化修复建议（现状 → 建议改法 → 涉及属性），采纳后随报告导出 */
   aiSuggestion?: { current: string; fix: string; properties?: string }
   /** 复验 */
@@ -152,6 +203,8 @@ export interface Issue {
   verifiedAt?: number
   /** 复验判定次数（通过/打回各计一次） */
   reverifyCount?: number
+  /** 截图附件（可选，向后兼容：旧数据无此字段按空列表处理） */
+  attachments?: IssueAttachment[]
   createdAt: number
 }
 
@@ -313,6 +366,10 @@ export interface AIAnnotationCandidate {
   severity: Severity
   category: Category
   suggestion?: { current: string; fix: string; properties?: string }
+  /** 问题分级（走查侧兜底判定后注入；手动 AI 识别不分级不携带） */
+  level?: IssueLevel
+  /** 分级判定理由 */
+  levelReason?: string
 }
 
 /** 离屏画布缓存：dataUrl → canvas（AI 结果换算测量 px / 吸色取样用，按 url 失效） */
@@ -383,6 +440,8 @@ export async function aiAnnotationsToIssues(
       isAISuggested: true,
       aiConfirmed: false,
       aiSuggestion: a.suggestion,
+      // 问题分级仅自动走查链路注入（候选携带 level 才透传），手动 AI 识别不分级
+      ...(a.level ? { level: a.level, levelReason: a.levelReason } : {}),
       createdAt: startAt + idx
     }
     if (a.shape === 'measure' && own) {
@@ -509,6 +568,23 @@ class WalkthroughDB extends Dexie {
       specTokenMappings: 'id, projectId, specId, [projectId+specId]',
       assistantMessages: 'id, projectId, pageId, createdAt, [projectId+pageId]'
     })
+    // v9：导出报告软删进回收站——reportRecords 增加 deletedAt 索引（其余扩展字段为非索引列无需迁移）；
+    // Dexie 要求每个 version 声明全部存在的表，未声明的表会被删除，故此处完整列出
+    this.version(9).stores({
+      projects: 'id, name',
+      folders: 'id, projectId, parentId',
+      pages: 'id, folderId, projectId',
+      issues: 'id, pageId, status, severity, category',
+      visits: 'id, pageId, projectId, visitedAt',
+      reportRecords: 'id, pageId, projectId, createdAt, deletedAt',
+      specCategories: 'id, platformKey',
+      designSpecs: 'id, categoryId',
+      specVersions: 'id, specId',
+      specTokens: 'id, specId, versionId, kind',
+      projectSpecBindings: 'id, projectId, specId, [projectId+specId]',
+      specTokenMappings: 'id, projectId, specId, [projectId+specId]',
+      assistantMessages: 'id, projectId, pageId, createdAt, [projectId+pageId]'
+    })
   }
 }
 
@@ -542,6 +618,7 @@ export const SEVERITY_LABELS: Record<Severity, string> = {
 }
 
 export const CATEGORY_LABELS: Record<Category, string> = {
+  prototype: '原型说明',
   spacing: '间距规范',
   typography: '文字排版',
   color: '颜色规范',
@@ -637,7 +714,9 @@ export async function deletePagesCascade(pageIds: string[]): Promise<void> {
     ...pages.flatMap((p) =>
       p ? [p.designImagePath, p.screenshotPath, p.walkDesignPath, p.walkShotPath] : []
     ),
-    ...issues.flatMap((i) => (i.fixScreenshotPath ? [i.fixScreenshotPath] : []))
+    ...issues.flatMap((i) => (i.fixScreenshotPath ? [i.fixScreenshotPath] : [])),
+    // 截图附件原图同步清理（旧数据无 attachments 字段按空列表处理）
+    ...issues.flatMap((i) => (i.attachments ?? []).map((a) => a.relPath))
   ]
   for (const imgPath of imagePaths) {
     if (imgPath) await window.electronAPI.deleteImage(imgPath).catch(() => undefined)
@@ -647,6 +726,14 @@ export async function deletePagesCascade(pageIds: string[]): Promise<void> {
     await db.issues.where('pageId').anyOf(pageIds).delete()
     await db.pages.bulkDelete(pageIds)
   })
+}
+
+/** 删除问题记录并同步清理其截图附件原图（文件失败不阻塞记录删除）；支持单条或批量 */
+export async function deleteIssuesCascade(issues: Issue[]): Promise<void> {
+  if (!issues.length) return
+  const paths = issues.flatMap((i) => (i.attachments ?? []).map((a) => a.relPath))
+  for (const p of paths) await window.electronAPI.deleteImage(p).catch(() => undefined)
+  await db.issues.bulkDelete(issues.map((i) => i.id))
 }
 
 /** 级联删除项目：其下全部文件夹、页面、问题记录与图片文件，以及规范绑定关系与 Token 映射 */
@@ -684,6 +771,762 @@ export async function deleteFolderCascade(folderId: string): Promise<void> {
   const pages = await db.pages.where('folderId').anyOf(allIds).toArray()
   await deletePagesCascade(pages.map((p) => p.id))
   await db.folders.bulkDelete(allIds)
+}
+
+/** ───────────── 软删除（回收站）：仅打标记隐藏，记录、标注与磁盘文件一律保留 ───────────── */
+
+/**
+ * 项目软删除（级联）：项目本体与其下全部文件夹（含子孙）、页面打同一批 deletedAt 标记；
+ * 磁盘图片、标注、访问记录一律不动，彻底删除时才走既有 deleteProjectCascade。
+ * 幂等：已是软删状态（deletedAt 非空）的记录保持原标记不覆盖。
+ */
+export async function softDeleteProjects(projectIds: string[], now?: number): Promise<void> {
+  if (!projectIds.length) return
+  const ts = now ?? Date.now()
+  const mark = { deletedAt: ts, originalParentId: null, deletedInMode: 'walk' as const }
+  const projects = (await db.projects.bulkGet(projectIds)).filter(
+    (p): p is Project => !!p && !p.deletedAt
+  )
+  await db.projects.bulkPut(
+    projects.map((p) => ({ ...p, ...mark, restoreOrder: p.sortNo ?? null }))
+  )
+  const folders = (await db.folders.where('projectId').anyOf(projectIds).toArray()).filter(
+    (f) => !f.deletedAt
+  )
+  if (folders.length) {
+    await db.folders.bulkPut(
+      folders.map((f) => ({
+        ...f,
+        deletedAt: ts,
+        originalParentId: f.parentId ?? null,
+        restoreOrder: f.sortNo ?? null,
+        deletedInMode: 'walk' as const
+      }))
+    )
+  }
+  const pages = (await db.pages.where('projectId').anyOf(projectIds).toArray()).filter(
+    (p) => !p.deletedAt
+  )
+  if (pages.length) {
+    await db.pages.bulkPut(
+      pages.map((p) => ({
+        ...p,
+        deletedAt: ts,
+        originalParentId: p.folderId ?? null,
+        restoreOrder: p.sortNo ?? null,
+        deletedInMode: 'walk' as const
+      }))
+    )
+  }
+}
+
+/**
+ * 文件夹软删除（级联）：BFS 收集全部子孙文件夹（防环，与 deleteFolderCascade 同口径），
+ * 连同各层文件夹内页面打同一批 deletedAt 标记；标注、磁盘文件不动。幂等：跳过已软删记录。
+ */
+export async function softDeleteFolders(folderIds: string[], now?: number): Promise<void> {
+  if (!folderIds.length) return
+  const ts = now ?? Date.now()
+  const allIds: string[] = []
+  const seen = new Set<string>(folderIds)
+  let frontier = [...folderIds]
+  while (frontier.length) {
+    allIds.push(...frontier)
+    const children = await db.folders
+      .where('parentId')
+      .anyOf(frontier)
+      .filter((f) => !seen.has(f.id))
+      .toArray()
+    frontier = children.map((f) => f.id)
+    frontier.forEach((id) => seen.add(id))
+  }
+  const folders = (await db.folders.bulkGet(allIds)).filter((f): f is Folder => !!f && !f.deletedAt)
+  if (folders.length) {
+    await db.folders.bulkPut(
+      folders.map((f) => ({
+        ...f,
+        deletedAt: ts,
+        originalParentId: f.parentId ?? null,
+        restoreOrder: f.sortNo ?? null,
+        deletedInMode: 'walk' as const
+      }))
+    )
+  }
+  const pages = (await db.pages.where('folderId').anyOf(allIds).toArray()).filter(
+    (p) => !p.deletedAt
+  )
+  if (pages.length) {
+    await db.pages.bulkPut(
+      pages.map((p) => ({
+        ...p,
+        deletedAt: ts,
+        originalParentId: p.folderId ?? null,
+        restoreOrder: p.sortNo ?? null,
+        deletedInMode: 'walk' as const
+      }))
+    )
+  }
+}
+
+/** 页面软删除：仅打标记（不动标注/issues/visits 与磁盘图片）。幂等：跳过已软删记录。 */
+export async function softDeletePages(pageIds: string[], now?: number): Promise<void> {
+  if (!pageIds.length) return
+  const pages = (await db.pages.bulkGet(pageIds)).filter(
+    (p): p is WalkthroughPage => !!p && !p.deletedAt
+  )
+  if (!pages.length) return
+  const ts = now ?? Date.now()
+  await db.pages.bulkPut(
+    pages.map((p) => ({
+      ...p,
+      deletedAt: ts,
+      originalParentId: p.folderId ?? null,
+      restoreOrder: p.sortNo ?? null,
+      deletedInMode: 'walk' as const
+    }))
+  )
+}
+
+/**
+ * 报告软删除（回收站）：仅打标记隐藏，HTML 文件保留在磁盘、云文档链接不动，保留期内可还原。
+ * 产品导出与走查导出共用 reportRecords 表，按 mode 标记所属模式（防止跨模式还原）。
+ * 幂等：跳过已软删记录。
+ */
+export async function softDeleteReports(ids: string[], mode: TrashMode, now?: number): Promise<void> {
+  if (!ids.length) return
+  const rows = (await db.reportRecords.bulkGet(ids)).filter(
+    (r): r is ReportRecord => !!r && !r.deletedAt
+  )
+  if (!rows.length) return
+  const ts = now ?? Date.now()
+  await db.reportRecords.bulkPut(rows.map((r) => ({ ...r, deletedAt: ts, deletedInMode: mode })))
+}
+
+/** ───────────── 回收站（阶段 2）：读取 / 还原 / 彻底删除 ───────────── */
+
+/** 回收站保留天数：阶段 3 起可配置（config.trashRetentionDays），读取见 db/trashCleanup.ts；
+ *  此处不再导出常量，避免各处硬编码 30 天 */
+
+export type TrashKind = 'project' | 'folder' | 'page' | 'report'
+
+/** 回收站列表行：走查 / 产品两库归一结构，TrashPage 直接渲染 */
+export interface TrashRow {
+  kind: TrashKind
+  id: string
+  name: string
+  /** 原位置父级路径（项目名 → 各级文件夹名）；项目本体为空数组（根目录） */
+  locationPath: string[]
+  deletedAt: number
+  /** 随本项一并删除的对象总数（含本体），彻底删除确认弹窗展示 */
+  objects: number
+  /** 随本项一并删除的附件数量（问题附件 + 复验截图 / 标注附件） */
+  attachments: number
+  /** 树形归属（「全部」tab 层级展示）：所属项目 id；项目本体无此字段 */
+  projectId?: string
+  /** 父文件夹 id（文件夹为其上级目录，页面为其原父目录）；顶层/根级为 null */
+  parentId?: string | null
+}
+
+export interface TrashOpResult {
+  /** 成功处理的记录数 */
+  ok: number
+  /** 原目录已不存在、挂回根目录的记录数 */
+  toRoot: number
+  /** 无法处理数（记录不存在 / 模式不符 / 父项目已彻底删除） */
+  failed: number
+}
+
+/** 目标层同名冲突自动加序号后缀（「项目 2」「项目 3」…），不覆盖现有数据 */
+export function dedupeTrashName(name: string, taken: Set<string>): string {
+  if (!taken.has(name)) return name
+  let i = 2
+  while (taken.has(`${name} ${i}`)) i++
+  return `${name} ${i}`
+}
+
+/** 还原公共字段清理：清 4 个软删字段，排序值插回删除前位置 */
+export function clearSoftDelete<T extends SoftDeleteFields & { sortNo?: number }>(row: T): T {
+  const next = { ...row }
+  delete next.deletedAt
+  delete next.originalParentId
+  delete next.restoreOrder
+  delete next.deletedInMode
+  if (row.restoreOrder != null) next.sortNo = row.restoreOrder
+  return next
+}
+
+/** 回收站是否有内容（任一表存在软删记录即 true）：供侧边栏按需显示「回收站」菜单。
+ *  报告与产品导出共用 reportRecords 表，按 deletedInMode 排除产品侧记录 */
+export async function hasWalkTrash(): Promise<boolean> {
+  for (const table of [db.projects, db.folders, db.pages]) {
+    if ((await table.filter((r) => !!r.deletedAt).limit(1).count()) > 0) return true
+  }
+  if (
+    (await db.reportRecords.filter((r) => !!r.deletedAt && r.deletedInMode !== 'product').limit(1).count()) > 0
+  ) {
+    return true
+  }
+  return false
+}
+
+/** 读取走查侧回收站全部软删记录（项目/文件夹/页面），归一为 TrashRow（含级联统计与原位置路径） */
+export async function getWalkTrashRows(): Promise<TrashRow[]> {
+  const [projects, folders, pages] = await Promise.all([
+    db.projects.toArray(),
+    db.folders.toArray(),
+    db.pages.toArray()
+  ])
+  const projectMap = new Map(projects.map((p) => [p.id, p]))
+  const folderMap = new Map(folders.map((f) => [f.id, f]))
+  const delProjects = projects.filter((p) => !!p.deletedAt)
+  const delFolders = folders.filter((f) => !!f.deletedAt)
+  const delPages = pages.filter((p) => !!p.deletedAt)
+
+  // 附件数按 pageId 汇总：问题附件 + 复验截图
+  const delPageIds = delPages.map((p) => p.id)
+  const pageIssues = delPageIds.length ? await db.issues.where('pageId').anyOf(delPageIds).toArray() : []
+  const attByPage = new Map<string, number>()
+  for (const i of pageIssues) {
+    const n = (i.attachments?.length ?? 0) + (i.fixScreenshotPath ? 1 : 0)
+    attByPage.set(i.pageId, (attByPage.get(i.pageId) ?? 0) + n)
+  }
+
+  // 原位置路径：项目名 + 祖先文件夹链（含软删祖先，路径展示需完整）
+  const ancestorNames = (folderId?: string): string[] => {
+    const chain: string[] = []
+    const seen = new Set<string>()
+    let cur = folderId ? folderMap.get(folderId) : undefined
+    while (cur && !seen.has(cur.id)) {
+      chain.unshift(cur.name)
+      seen.add(cur.id)
+      cur = cur.parentId ? folderMap.get(cur.parentId) : undefined
+    }
+    return chain
+  }
+  // 文件夹子孙集（BFS 防环）
+  const descendantsOf = (rootId: string): Set<string> => {
+    const out = new Set<string>([rootId])
+    let frontier = [rootId]
+    while (frontier.length) {
+      const children = folders.filter((f) => f.parentId != null && frontier.includes(f.parentId) && !out.has(f.id))
+      children.forEach((c) => out.add(c.id))
+      frontier = children.map((c) => c.id)
+    }
+    return out
+  }
+
+  const rows: TrashRow[] = []
+  for (const p of delProjects) {
+    const subPages = delPages.filter((pg) => pg.projectId === p.id)
+    rows.push({
+      kind: 'project',
+      id: p.id,
+      name: p.name,
+      locationPath: [],
+      deletedAt: p.deletedAt!,
+      objects: 1 + delFolders.filter((f) => f.projectId === p.id).length + subPages.length,
+      attachments: subPages.reduce((sum, pg) => sum + (attByPage.get(pg.id) ?? 0), 0)
+    })
+  }
+  for (const f of delFolders) {
+    const desc = descendantsOf(f.id)
+    const innerPages = delPages.filter((pg) => pg.folderId != null && desc.has(pg.folderId))
+    rows.push({
+      kind: 'folder',
+      id: f.id,
+      name: f.name,
+      projectId: f.projectId,
+      parentId: f.parentId ?? null,
+      locationPath: [...(projectMap.get(f.projectId)?.name ? [projectMap.get(f.projectId)!.name] : []), ...ancestorNames(f.id)],
+      deletedAt: f.deletedAt!,
+      objects: desc.size + innerPages.length,
+      attachments: innerPages.reduce((sum, pg) => sum + (attByPage.get(pg.id) ?? 0), 0)
+    })
+  }
+  for (const pg of delPages) {
+    const proj = projectMap.get(pg.projectId)
+    rows.push({
+      kind: 'page',
+      id: pg.id,
+      name: pg.pageName,
+      projectId: pg.projectId,
+      parentId: pg.originalParentId ?? pg.folderId ?? null,
+      locationPath: [...(proj ? [proj.name] : []), ...ancestorNames(pg.folderId)],
+      deletedAt: pg.deletedAt!,
+      objects: 1,
+      attachments: attByPage.get(pg.id) ?? 0
+    })
+  }
+  return rows
+}
+
+/** 走查侧回收站报告行（kind 'report'）：原位置 = 所属项目 + 文件夹链 + 页面名；
+ *  页面也在回收站时 parentId 指向页面（「全部」tab 树形挂为页面子级），否则顶层散件 */
+export async function getWalkTrashReports(): Promise<TrashRow[]> {
+  const [reports, pages, projects, folders] = await Promise.all([
+    db.reportRecords.toArray(),
+    db.pages.toArray(),
+    db.projects.toArray(),
+    db.folders.toArray()
+  ])
+  const pageMap = new Map(pages.map((p) => [p.id, p]))
+  const projectMap = new Map(projects.map((p) => [p.id, p]))
+  const folderMap = new Map(folders.map((f) => [f.id, f]))
+  const ancestorNames = (folderId?: string): string[] => {
+    const chain: string[] = []
+    const seen = new Set<string>()
+    let cur = folderId ? folderMap.get(folderId) : undefined
+    while (cur && !seen.has(cur.id)) {
+      chain.unshift(cur.name)
+      seen.add(cur.id)
+      cur = cur.parentId ? folderMap.get(cur.parentId) : undefined
+    }
+    return chain
+  }
+  return reports
+    .filter((r) => !!r.deletedAt && (!r.deletedInMode || r.deletedInMode === 'walk'))
+    .map((r) => {
+      const page = pageMap.get(r.pageId)
+      const proj = projectMap.get(page?.projectId ?? r.projectId)
+      return {
+        kind: 'report' as const,
+        id: r.id,
+        name: r.name,
+        projectId: r.projectId,
+        parentId: r.pageId || null,
+        locationPath: [
+          ...(proj ? [proj.name] : []),
+          ...(page ? [...ancestorNames(page.folderId), page.pageName] : [])
+        ],
+        deletedAt: r.deletedAt!,
+        objects: 1,
+        attachments: 0
+      }
+    })
+}
+
+/** 还原软删父级链（页面/文件夹还原时用）：沿 parentId 向上把软删祖先文件夹逐个还原。
+ *  链上记录已被彻底删除（不存在）视为断链返回 false，调用方挂到项目根目录 */
+async function restoreWalkFolderChain(folderId: string): Promise<boolean> {
+  let curId: string | undefined = folderId
+  const seen = new Set<string>()
+  while (curId && !seen.has(curId)) {
+    seen.add(curId)
+    const row: Folder | undefined = await db.folders.get(curId)
+    if (!row) return false
+    if (row.deletedAt) await db.folders.put(clearSoftDelete(row))
+    curId = row.parentId ?? undefined
+  }
+  return true
+}
+
+/** 还原链顶软删项目记录（仅本体清字段，不级联其其他子孙）；记录不存在返回 false */
+async function restoreWalkProjectRecord(projectId: string): Promise<boolean> {
+  const proj = await db.projects.get(projectId)
+  if (!proj) return false
+  if (proj.deletedAt) await db.projects.put(clearSoftDelete(proj))
+  return true
+}
+
+/** 还原走查侧软删项目：本体插回根目录（同名加序号后缀），全部软删子文件夹/页面一并还原 */
+export async function restoreWalkProjects(ids: string[]): Promise<TrashOpResult> {
+  const res: TrashOpResult = { ok: 0, toRoot: 0, failed: 0 }
+  const taken = new Set((await db.projects.toArray()).filter((p) => !p.deletedAt).map((p) => p.name))
+  for (const id of ids) {
+    try {
+      const row = await db.projects.get(id)
+      // 幂等：记录不存在 / 已还原 / 模式不符直接跳过
+      if (!row || !row.deletedAt || (row.deletedInMode && row.deletedInMode !== 'walk')) {
+        res.failed++
+        continue
+      }
+      const next = clearSoftDelete(row)
+      next.name = dedupeTrashName(next.name, taken)
+      taken.add(next.name)
+      await db.projects.put(next)
+      // 级联还原全部软删子项（还原父项时子项一并还原）
+      const fs = (await db.folders.where('projectId').equals(id).toArray()).filter((f) => f.deletedAt)
+      if (fs.length) await db.folders.bulkPut(fs.map(clearSoftDelete))
+      const ps = (await db.pages.where('projectId').equals(id).toArray()).filter((p) => p.deletedAt)
+      if (ps.length) await db.pages.bulkPut(ps.map(clearSoftDelete))
+      res.ok++
+    } catch (err) {
+      console.warn('[TRASH] 还原项目失败:', id, err)
+      res.failed++
+    }
+  }
+  return res
+}
+
+/** 还原走查侧软删文件夹：整条父级链一并还原，全部软删子孙文件夹与各层页面同批还原 */
+export async function restoreWalkFolders(ids: string[]): Promise<TrashOpResult> {
+  const res: TrashOpResult = { ok: 0, toRoot: 0, failed: 0 }
+  for (const id of ids) {
+    try {
+      const row = await db.folders.get(id)
+      if (!row || !row.deletedAt || (row.deletedInMode && row.deletedInMode !== 'walk')) {
+        res.failed++
+        continue
+      }
+      // 链顶项目已被彻底删除 → 文件夹无处可挂，放弃还原
+      if (!(await restoreWalkProjectRecord(row.projectId))) {
+        console.warn('[TRASH] 还原文件夹失败（原项目已不存在）:', id)
+        res.failed++
+        continue
+      }
+      // 上级文件夹路径：父目录软删 → 同步还原整条祖先链（项目级联删除后单还原子文件夹的场景）；
+      // 链上目录已被彻底删除 → 挂项目根目录
+      let parentId: string | undefined = row.originalParentId ?? row.parentId ?? undefined
+      if (parentId) {
+        const parent = await db.folders.get(parentId)
+        if (!parent) {
+          parentId = undefined
+          res.toRoot++
+        } else if (parent.deletedAt && !(await restoreWalkFolderChain(parent.id))) {
+          parentId = undefined
+          res.toRoot++
+        }
+      }
+      // 本体同名冲突：与同一父层下正常文件夹重名时加序号后缀
+      const sameLayer = (await db.folders.where('projectId').equals(row.projectId).toArray()).filter(
+        (f) => !f.deletedAt && f.id !== id && (f.parentId ?? undefined) === parentId
+      )
+      const taken = new Set(sameLayer.map((f) => f.name))
+      const next = clearSoftDelete(row)
+      next.parentId = parentId
+      next.name = dedupeTrashName(next.name, taken)
+      await db.folders.put(next)
+      // BFS 收集软删子孙文件夹，全部还原（与 softDeleteFolders 同口径）
+      const allIds = [id]
+      const seen = new Set([id])
+      let frontier = [id]
+      while (frontier.length) {
+        const children = await db.folders
+          .where('parentId')
+          .anyOf(frontier)
+          .filter((f) => !seen.has(f.id))
+          .toArray()
+        frontier = children.map((f) => f.id)
+        frontier.forEach((fid) => seen.add(fid))
+        allIds.push(...frontier)
+      }
+      const childFolders = (await db.folders.bulkGet(allIds.filter((fid) => fid !== id))).filter(
+        (f): f is Folder => !!f && !!f.deletedAt
+      )
+      if (childFolders.length) await db.folders.bulkPut(childFolders.map(clearSoftDelete))
+      const childPages = (await db.pages.where('folderId').anyOf(allIds).toArray()).filter((p) => p.deletedAt)
+      if (childPages.length) await db.pages.bulkPut(childPages.map(clearSoftDelete))
+      res.ok++
+    } catch (err) {
+      console.warn('[TRASH] 还原文件夹失败:', id, err)
+      res.failed++
+    }
+  }
+  return res
+}
+
+/** 还原走查侧软删页面：优先还原整条父级链；原目录已被彻底删除时挂到项目根目录 */
+export async function restoreWalkPages(ids: string[]): Promise<TrashOpResult> {
+  const res: TrashOpResult = { ok: 0, toRoot: 0, failed: 0 }
+  for (const id of ids) {
+    try {
+      const row = await db.pages.get(id)
+      if (!row || !row.deletedAt || (row.deletedInMode && row.deletedInMode !== 'walk')) {
+        res.failed++
+        continue
+      }
+      if (!(await restoreWalkProjectRecord(row.projectId))) {
+        console.warn('[TRASH] 还原页面失败（原项目已不存在）:', id)
+        res.failed++
+        continue
+      }
+      // 父目录：originalParentId 优先；目录软删 → 还原整条父级链；目录已被彻底删除 → 挂项目根目录
+      const parentId = row.originalParentId ?? row.folderId ?? undefined
+      let folderId: string | undefined = undefined
+      if (parentId) {
+        const parent = await db.folders.get(parentId)
+        if (!parent) {
+          folderId = undefined
+          res.toRoot++
+        } else if (parent.deletedAt) {
+          const chainOk = await restoreWalkFolderChain(parent.id)
+          if (!chainOk) {
+            folderId = undefined
+            res.toRoot++
+          } else folderId = parent.id
+        } else folderId = parent.id
+      }
+      // 同名冲突：与同层正常页面重名时加序号后缀，不覆盖现有数据
+      const sameLayer = (await db.pages.where('projectId').equals(row.projectId).toArray()).filter(
+        (p) => !p.deletedAt && p.id !== id && (p.folderId ?? undefined) === folderId
+      )
+      const taken = new Set(sameLayer.map((p) => p.pageName))
+      const next = clearSoftDelete(row)
+      next.folderId = folderId
+      next.pageName = dedupeTrashName(next.pageName, taken)
+      await db.pages.put(next)
+      res.ok++
+    } catch (err) {
+      console.warn('[TRASH] 还原页面失败:', id, err)
+      res.failed++
+    }
+  }
+  return res
+}
+
+/** 还原走查侧软删报告：所属页面也被软删时先还原页面及其父级链；
+ *  页面已被彻底删除则报告无处可挂，放弃还原 */
+export async function restoreWalkReports(ids: string[]): Promise<TrashOpResult> {
+  const res: TrashOpResult = { ok: 0, toRoot: 0, failed: 0 }
+  for (const id of ids) {
+    try {
+      const row = await db.reportRecords.get(id)
+      if (!row || !row.deletedAt || (row.deletedInMode && row.deletedInMode !== 'walk')) {
+        res.failed++
+        continue
+      }
+      const page = await db.pages.get(row.pageId)
+      if (!page) {
+        console.warn('[TRASH] 还原报告失败（原页面已不存在）:', id)
+        res.failed++
+        continue
+      }
+      if (page.deletedAt) {
+        const r = await restoreWalkPages([page.id])
+        if (r.ok === 0) {
+          res.failed++
+          continue
+        }
+      }
+      await db.reportRecords.put(clearSoftDelete(row))
+      res.ok++
+    } catch (err) {
+      console.warn('[TRASH] 还原报告失败:', id, err)
+      res.failed++
+    }
+  }
+  return res
+}
+
+/** 彻底删除回收站内页面：物理清理磁盘图片（原图/截图/复验图/附件），
+ *  移除导出记录（HTML 文件移入废纸篓可恢复），删除问题、访问记录与页面记录。仅处理已软删记录 */
+async function purgeWalkPages(pageIds: string[]): Promise<number> {
+  const pages = (await db.pages.bulkGet(pageIds)).filter(
+    (p): p is WalkthroughPage => !!p && !!p.deletedAt
+  )
+  if (!pages.length) return 0
+  const ids = pages.map((p) => p.id)
+  const issues = await db.issues.where('pageId').anyOf(ids).toArray()
+  const imagePaths = [
+    ...pages.flatMap((p) => [p.designImagePath, p.screenshotPath, p.walkDesignPath, p.walkShotPath]),
+    ...issues.flatMap((i) => (i.fixScreenshotPath ? [i.fixScreenshotPath] : [])),
+    ...issues.flatMap((i) => (i.attachments ?? []).map((a) => a.relPath))
+  ].filter((p): p is string => !!p)
+  // 磁盘图片物理删除（含此前散落在 image_trash 的同路径历史文件；单文件失败仅 [TRASH] 日志）
+  if (imagePaths.length) {
+    await window.electronAPI
+      .purgeImages([...new Set(imagePaths)])
+      .catch((err) => console.warn('[TRASH] 批量清理页面图片失败:', err))
+  }
+  // 导出记录：库内行删除；HTML 报告文件移入废纸篓（可恢复，不直接销毁用户文件）
+  const reports = await db.reportRecords.where('pageId').anyOf(ids).toArray()
+  for (const r of reports) {
+    if (r.filePath) {
+      await window.electronAPI
+        .deleteReportFile(r.filePath)
+        .catch((err) => console.warn('[TRASH] 清理报告文件失败:', r.id, err))
+    }
+  }
+  if (reports.length) await db.reportRecords.bulkDelete(reports.map((r) => r.id))
+  await db.transaction('rw', db.pages, db.issues, db.visits, async () => {
+    await db.visits.where('pageId').anyOf(ids).delete()
+    await db.issues.where('pageId').anyOf(ids).delete()
+    await db.pages.bulkDelete(ids)
+  })
+  return pages.length
+}
+
+/** 彻底删除回收站内项目：子树页面/文件夹与磁盘图片全清，项目本体及关联数据移除 */
+export async function permanentlyDeleteWalkProjects(ids: string[]): Promise<TrashOpResult> {
+  const res: TrashOpResult = { ok: 0, toRoot: 0, failed: 0 }
+  for (const id of ids) {
+    try {
+      const proj = await db.projects.get(id)
+      if (!proj || !proj.deletedAt) {
+        res.failed++
+        continue
+      }
+      const pageIds = (await db.pages.where('projectId').equals(id).toArray()).map((p) => p.id)
+      await purgeWalkPages(pageIds)
+      // 项目 Logo 图片一并清理
+      if (proj.logoPath) {
+        await window.electronAPI
+          .purgeImages([proj.logoPath])
+          .catch((err) => console.warn('[TRASH] 清理项目 Logo 失败:', id, err))
+      }
+      // 残余导出记录兜底（按 projectId）
+      const restReports = await db.reportRecords.where('projectId').equals(id).toArray()
+      for (const r of restReports) {
+        if (r.filePath) {
+          await window.electronAPI
+            .deleteReportFile(r.filePath)
+            .catch((err) => console.warn('[TRASH] 清理报告文件失败:', r.id, err))
+        }
+      }
+      if (restReports.length) await db.reportRecords.bulkDelete(restReports.map((r) => r.id))
+      await db.transaction(
+        'rw',
+        db.projects,
+        db.folders,
+        db.visits,
+        db.projectSpecBindings,
+        db.specTokenMappings,
+        async () => {
+          await db.visits.where('projectId').equals(id).delete()
+          await db.folders.where('projectId').equals(id).delete()
+          await db.projectSpecBindings.where('projectId').equals(id).delete()
+          await db.specTokenMappings.where('projectId').equals(id).delete()
+          await db.projects.delete(id)
+        }
+      )
+      res.ok++
+    } catch (err) {
+      console.warn('[TRASH] 彻底删除项目失败:', id, err)
+      res.failed++
+    }
+  }
+  return res
+}
+
+/** 彻底删除回收站内文件夹：子孙文件夹与各层页面记录、问题、磁盘图片全清 */
+export async function permanentlyDeleteWalkFolders(ids: string[]): Promise<TrashOpResult> {
+  const res: TrashOpResult = { ok: 0, toRoot: 0, failed: 0 }
+  const validRoots: string[] = []
+  for (const id of ids) {
+    const row = await db.folders.get(id)
+    if (!row || !row.deletedAt) {
+      res.failed++
+      continue
+    }
+    validRoots.push(id)
+  }
+  if (!validRoots.length) return res
+  try {
+    // 与 softDeleteFolders / deleteFolderCascade 同口径收集子孙（BFS 防环）
+    const bundle = await captureBatchDeleteUndo(validRoots, [])
+    const pageIds = bundle.pages.filter((p) => p.deletedAt).map((p) => p.id)
+    const folderIds = bundle.folders.filter((f) => f.deletedAt).map((f) => f.id)
+    if (pageIds.length) await purgeWalkPages(pageIds)
+    if (folderIds.length) await db.folders.bulkDelete(folderIds)
+    res.ok = validRoots.length
+  } catch (err) {
+    console.warn('[TRASH] 彻底删除文件夹失败:', validRoots, err)
+    res.failed += validRoots.length
+  }
+  return res
+}
+
+/** 彻底删除回收站内页面 */
+export async function permanentlyDeleteWalkPages(ids: string[]): Promise<TrashOpResult> {
+  const res: TrashOpResult = { ok: 0, toRoot: 0, failed: 0 }
+  try {
+    res.ok = await purgeWalkPages(ids)
+  } catch (err) {
+    console.warn('[TRASH] 彻底删除页面失败:', ids, err)
+    res.failed += ids.length
+  }
+  return res
+}
+
+/** 彻底删除回收站内报告：HTML 报告文件移入系统废纸篓（可恢复），库内记录删除。
+ *  走查/产品两模式共用（仅处理已软删记录） */
+export async function permanentlyDeleteReports(ids: string[]): Promise<TrashOpResult> {
+  const res: TrashOpResult = { ok: 0, toRoot: 0, failed: 0 }
+  const rows = (await db.reportRecords.bulkGet(ids)).filter(
+    (r): r is ReportRecord => !!r && !!r.deletedAt
+  )
+  for (const r of rows) {
+    try {
+      if (r.filePath) {
+        await window.electronAPI
+          .deleteReportFile(r.filePath)
+          .catch((err) => console.warn('[TRASH] 清理报告文件失败:', r.id, err))
+      }
+      await db.reportRecords.delete(r.id)
+      res.ok++
+    } catch (err) {
+      console.warn('[TRASH] 彻底删除报告失败:', r.id, err)
+      res.failed++
+    }
+  }
+  res.failed += ids.length - rows.length
+  return res
+}
+
+/** 批量删除快照：Cmd+Z 撤回所需的完整记录与图片路径（撤销时先恢复文件再回写记录） */
+export interface WalkDeleteEntry {
+  folders: Folder[]
+  pages: WalkthroughPage[]
+  issues: Issue[]
+  visits: Visit[]
+  /** 涉及的全部图片相对路径（去重），撤销时据此从回收站恢复文件 */
+  imagePaths: string[]
+}
+
+/**
+ * 批量删除前快照（Cmd+Z 撤回用）：收集选中文件夹的全部子孙文件夹（与 deleteFolderCascade
+ * 同口径），连同选中页面一并取回完整记录（folders/pages/issues/visits）与涉及图片路径。
+ */
+export async function captureBatchDeleteUndo(
+  folderIds: string[],
+  pageIds: string[]
+): Promise<WalkDeleteEntry> {
+  // BFS 收集选中文件夹的子孙文件夹（防环：访问集去重）
+  const collected: string[] = []
+  const seen = new Set<string>(folderIds)
+  let frontier = [...folderIds]
+  while (frontier.length) {
+    collected.push(...frontier)
+    const children = await db.folders
+      .where('parentId')
+      .anyOf(frontier)
+      .filter((f) => !seen.has(f.id))
+      .toArray()
+    frontier = children.map((f) => f.id)
+    frontier.forEach((id) => seen.add(id))
+  }
+  // 选中页面 + 文件夹树内页面，按 id 去重
+  const pageMap = new Map<string, WalkthroughPage>()
+  if (pageIds.length) {
+    for (const p of await db.pages.bulkGet(pageIds)) if (p) pageMap.set(p.id, p)
+  }
+  if (collected.length) {
+    for (const p of await db.pages.where('folderId').anyOf(collected).toArray()) pageMap.set(p.id, p)
+  }
+  const pages = [...pageMap.values()]
+  const pageIdList = pages.map((p) => p.id)
+  const issues = pageIdList.length ? await db.issues.where('pageId').anyOf(pageIdList).toArray() : []
+  const visits = pageIdList.length ? await db.visits.where('pageId').anyOf(pageIdList).toArray() : []
+  const folders = collected.length
+    ? (await db.folders.bulkGet(collected)).filter((f): f is Folder => !!f)
+    : []
+  const imagePaths = [
+    ...pages.flatMap((p) => [
+      p.designImagePath,
+      p.screenshotPath,
+      p.walkDesignPath,
+      p.walkShotPath
+    ]),
+    ...issues.flatMap((i) => (i.fixScreenshotPath ? [i.fixScreenshotPath] : [])),
+    ...issues.flatMap((i) => (i.attachments ?? []).map((a) => a.relPath))
+  ].filter((p): p is string => !!p)
+  return {
+    folders,
+    pages,
+    issues,
+    visits,
+    imagePaths: [...new Set(imagePaths)]
+  }
 }
 
 /** 级联删除一套规范：绑定关系、全部历史版本的 Token、Token 映射、版本记录与规范行（.fig 存档文件保留不动） */

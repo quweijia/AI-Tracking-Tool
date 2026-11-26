@@ -220,7 +220,7 @@ export default function ChatMessages({ onSuggest, onRetry }: ChatMessagesProps) 
                   {m.refs && m.refs.length > 0 && (
                     <div className="ai-bubble-refs">
                       {m.refs.map((r: AssistantRef) => (
-                        <span key={`${r.type}-${r.id}`} className="ai-ref-chip">
+                        <span key={`${r.type}-${r.id}`} className="chip chip-sm ai-ref-chip">
                           @{mentionChipLabel(r)}
                         </span>
                       ))}

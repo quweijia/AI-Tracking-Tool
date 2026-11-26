@@ -5,6 +5,7 @@ export default {
   winClose: 'Close',
   winMinimize: 'Minimize',
   winMaximize: 'Maximize',
+  winRestore: 'Restore',
   // Settings navigation
   settingsSection: 'Settings',
   navGeneral: 'General',
@@ -22,6 +23,13 @@ export default {
   navRecent: 'Recent',
   navProjects: 'Projects',
   navReports: 'Reports',
+  navTrash: 'Trash',
+  // Product mode (phase 1: title / menu / placeholder page)
+  productAppName: 'Product Annotation Tool',
+  navProductAnnotation: 'Product Annotation',
+  productHomeEmpty: 'Product annotation is coming soon.',
+  switchToProduct: 'Switch to Product Annotation',
+  switchToWalk: 'Switch to AI Walkthrough',
   treeCollapse: 'Collapse',
   treeExpand: 'Expand',
   emptyProjects: 'No projects yet',
@@ -56,5 +64,16 @@ export default {
   enumerateJoin: ', ',
   cancel: 'Cancel',
   // AI recognition streaming progress note
-  progressNote: '{{sec}}s · {{chars}}k chars received'
+  progressNote: '{{sec}}s · {{chars}}k chars received',
+  // Background task floating pill (shown while away from the task page)
+  bgTaskRunning: 'AI recognition running ({{n}} task(s))',
+  bgTaskDone: 'AI recognition finished',
+  bgTaskOpen: 'View',
+  bgTaskSelect: 'Select task',
+  bgTaskStateRunning: 'Running',
+  bgTaskStateDone: 'Done',
+  bgTaskStateFailed: 'Failed',
+  bgTaskUnnamed: 'Untitled page',
+  bgTaskModeManual: 'Manual',
+  bgTaskModeAuto: 'Auto walk'
 }

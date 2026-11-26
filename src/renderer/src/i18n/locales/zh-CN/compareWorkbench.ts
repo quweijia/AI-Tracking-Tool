@@ -66,6 +66,9 @@ export default {
   collapseSettings: '收起设置',
   expandSettings: '展开设置',
   workModeSwitchTitle: '切换手动标注与自动走查模式',
+  // 页面内全屏标注按钮（Segmented 右侧图标按钮，仅切换页内布局，非系统全屏）
+  fsAnnotate: '页面内全屏标注',
+  fsAnnotateExit: '退出全屏标注',
   modeManual: '手动标注',
   modeAuto: '自动走查',
   /** 对比面板 */
@@ -89,6 +92,16 @@ export default {
   skillPickTitle: '选择走查技能',
   skillPickDesc: '可多选 SkillHub 技能，AI 识别时将按技能要点进行检查（不选则按通用规范识别）。',
   skillPickEmpty: '还没有可用技能，可到「设置 → SkillHub」添加',
+  /** 设计稿重新上传弹窗（本地文件 / Figma 读取二选一） */
+  reupDesignTitle: '重新上传设计稿',
+  reupDesignLocal: '上传本地文件',
+  reupDesignLocalHint: '从电脑选择图片替换当前设计稿',
+  reupDesignFigma: '读取 Figma 设计稿',
+  reupDesignFigmaHint: '按页面绑定的 Figma 链接直接读取画板截图',
+  reupDesignNoFigmaUrl: '当前页面未绑定 Figma 链接，请先在「页面编辑」中填写',
+  reupDesignNoPat: '未配置 Figma 访问令牌（PAT），请到「设置 → MCP 服务」配置',
+  reupDesignFigmaBusy: '正在读取 Figma 设计稿…',
+  reupDesignFigmaFail: 'Figma 设计稿读取失败',
   cancel: '取消',
   startWalkthrough: '开始走查',
   walkWithoutSkill: '不使用 Skill 进行走查'

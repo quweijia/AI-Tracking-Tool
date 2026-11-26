@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { db, ReportRecord } from '../db'
+import { db, ReportRecord, Project, WalkthroughPage } from '../db'
+import { productDb, ProductProject, ProductAnnotationSet } from '../db/product'
+import { useProductModeStore } from '../stores/productMode'
 import USelect from '../components/USelect'
 import heroBannerArtUrl from '../assets/hero-banner-re.png'
 import heroBannerArtDarkUrl from '../assets/hero-banner-re-dark.png'
@@ -72,30 +74,6 @@ function SearchIcon() {
   )
 }
 
-/** 视图切换图标（网格 / 列表） */
-function ViewIcon({ mode }: { mode: ViewMode }) {
-  if (mode === 'grid') {
-    return (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <rect x="3" y="3" width="7" height="7" rx="1.5" />
-        <rect x="14" y="3" width="7" height="7" rx="1.5" />
-        <rect x="3" y="14" width="7" height="7" rx="1.5" />
-        <rect x="14" y="14" width="7" height="7" rx="1.5" />
-      </svg>
-    )
-  }
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M4 6h16M4 12h16M4 18h16" />
-    </svg>
-  )
-}
-
-/** 报告缩略图占位：页面名首字符 + 渐变底（报告记录未存缩略图） */
-function ReportThumb({ name, large }: { name: string; large?: boolean }) {
-  return <span className={`reports-thumb${large ? ' lg' : ''}`}>{name.slice(0, 1)}</span>
-}
-
 const fmtTime = (ts: number) => new Date(ts).toLocaleString('zh-CN', { hour12: false })
 
 /**
@@ -106,12 +84,30 @@ const fmtTime = (ts: number) => new Date(ts).toLocaleString('zh-CN', { hour12: f
  */
 export default function ReportsPage() {
   const { t } = useTranslation('reportsPage')
+  const productMode = useProductModeStore((s) => s.enabled)
+  /** 产品项目 ID 集合：产品导出与走查导出共用 reportRecords 表，按模式分离显示（互不泄漏） */
+  const productProjectIds =
+    useLiveQuery(async () => new Set((await productDb.projects.toArray()).map((p) => p.id)), []) ?? new Set<string>()
   const records = useLiveQuery(
-    () => db.reportRecords.filter((r) => r.type === 'html').toArray(),
-    []
+    async () =>
+      (
+        await db.reportRecords.filter((r) => r.type === 'html' && !r.deletedAt).toArray()
+      ).filter((r) => productProjectIds.has(r.projectId) === productMode),
+    [productMode, productProjectIds]
   )
-  const projects = useLiveQuery(() => db.projects.toArray(), []) ?? []
-  const pages = useLiveQuery(() => db.pages.toArray(), []) ?? []
+  const walkProjects =
+    useLiveQuery(() => (productMode ? Promise.resolve<Project[]>([]) : db.projects.toArray()), [productMode]) ?? []
+  const productProjects =
+    useLiveQuery(() => (productMode ? productDb.projects.toArray() : Promise.resolve<ProductProject[]>([])), [productMode]) ?? []
+  // 产品标注集：产品报告为项目级，组行项目名后逐个列出标注集链接（点击进入标注画布）
+  const productSets =
+    useLiveQuery(
+      () => (productMode ? productDb.sets.toArray() : Promise.resolve<ProductAnnotationSet[]>([])),
+      [productMode]
+    ) ?? []
+  const projects = productMode ? productProjects : walkProjects
+  const pages =
+    useLiveQuery(() => (productMode ? Promise.resolve<WalkthroughPage[]>([]) : db.pages.toArray()), [productMode]) ?? []
   const [browserMode, setBrowserMode] = useState<'builtin' | 'system'>('builtin')
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [msg, setMsg] = useState<OpenMsg>(null)
@@ -153,13 +149,18 @@ export default function ReportsPage() {
         key,
         projectId: list[0].projectId,
         pageId: list[0].pageId,
-        pageName: pages.find((p) => p.id === list[0].pageId)?.pageName ?? t('pageDeleted'),
+        // 组名：走查取页面名；产品按记录 pageId 取标注集（页面）名，旧记录无 setId 回退项目名
+        pageName: productMode
+          ? (list[0].pageId
+              ? (productSets.find((s) => s.id === list[0].pageId)?.name ?? t('pageDeleted'))
+              : (productProjects.find((p) => p.id === list[0].projectId)?.name ?? t('unknownProject')))
+          : (pages.find((p) => p.id === list[0].pageId)?.pageName ?? t('pageDeleted')),
         versions,
         latestAt: list[list.length - 1].createdAt,
         totalIssues: versions.reduce((s, v) => s + v.total, 0)
       }
     }).sort((a, b) => b.latestAt - a.latestAt)
-  }, [records, pages, t])
+  }, [records, pages, productMode, productProjects, productSets, t])
 
   /** 项目筛选（有记录的项目才出现在下拉里，按名称排序） */
   const projectOptions = useMemo(() => {
@@ -222,13 +223,114 @@ export default function ReportsPage() {
     }
   }
 
+  /** 列表视图单个版本组：组行点击展开/收起历史版本，版本行点击打开报告 */
+  const renderGroup = (g: ReportGroup) => {
+    const open = expanded.has(g.key)
+    const latest = g.versions[0]
+    const pg = pages.find((p) => p.id === g.pageId)
+    const accepted = !!pg?.accepted
+    return (
+      <div key={g.key} className="reports-group-wrap">
+        <div
+          className={`rv2-table-row reports-row group${open ? ' open' : ''}`}
+          role="button"
+          tabIndex={0}
+          title={open ? t('collapseVersionsTip') : t('expandVersionsTip')}
+          onClick={() => toggle(g.key)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              toggle(g.key)
+            }
+          }}
+        >
+          <span className="reports-cell-name">
+            <span className="reports-name-text">
+              <b>
+                {g.pageName}
+                <em className="count count-accent reports-ver-count">{t('versionCount', { n: g.versions.length })}</em>
+              </b>
+            </span>
+          </span>
+          <span className="reports-cell-pp">
+            {productMode ? (
+              // 产品：仅显示页面（标注集）链接
+              g.pageId && productSets.some((s) => s.id === g.pageId) ? (
+                <Link to={`/product/${g.projectId}/set/${g.pageId}`}>{g.pageName}</Link>
+              ) : (
+                t('pageDeleted')
+              )
+            ) : (
+              <>
+                {projectName(g.projectId)} · {pg ? <Link to={`/project/${g.projectId}/page/${pg.id}`}>{g.pageName}</Link> : t('pageDeleted')}
+              </>
+            )}
+          </span>
+          <span className="reports-cell-issues">{latest.total}</span>
+          <span className="rv2-cell-time">{fmtTime(latest.createdAt)}</span>
+          <span className="reports-cell-status">
+            {productMode ? (
+              '—'
+            ) : (
+              <span className={`badge ${accepted ? 'badge-success' : 'badge-accent'} badge-lg`}>
+                {accepted ? t('statusDone') : t('statusDoing')}
+              </span>
+            )}
+          </span>
+        </div>
+
+        {/* 版本行（展开时显示，新→旧，最新导出在最上；点击整行打开该版本） */}
+        {open && (
+          <div className="reports-ver-list">
+            {g.versions.map((v, vi) => (
+              <div
+                key={v.id}
+                className="rv2-table-row reports-row ver"
+                role="button"
+                tabIndex={0}
+                title={v.filePath ? t('openVersionTip') : t('versionNoPathTip')}
+                onClick={() => void openReport(v)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    void openReport(v)
+                  }
+                }}
+              >
+                <span className="reports-cell-name">
+                  <span className={`badge badge-accent reports-ver-badge${vi === 0 ? ' latest' : ''}`}>
+                    {vi === 0 ? t('latest') : `V${v.ver}`}
+                  </span>
+                  <span className="reports-name-text">
+                    <b>{v.name || t('versionNameFallback', { n: v.ver })}</b>
+                  </span>
+                </span>
+                <span className="reports-cell-issues">{v.total}</span>
+                <span className="rv2-cell-time">{fmtTime(v.createdAt)}</span>
+                <span className="reports-cell-status">
+                  {productMode ? (
+                    '—'
+                  ) : (
+                    <span className={`badge ${accepted ? 'badge-success' : 'badge-accent'} badge-lg`}>
+                      {accepted ? t('statusDone') : t('statusDoing')}
+                    </span>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="page reports-v2">
       {/* ===== 顶部横幅（原型样式，与最近访问横幅同风格） ===== */}
       <div className="rv2-hero reports-hero">
         <div className="rv2-hero-main">
-          <h1 className="rv2-title">{t('heroTitle')}</h1>
-          <p className="rv2-desc">{t('heroDesc')}</p>
+          <h1 className="rv2-title">{t(productMode ? 'heroTitleProduct' : 'heroTitle')}</h1>
+          <p className="rv2-desc">{t(productMode ? 'heroDescProduct' : 'heroDesc')}</p>
           <div className="rv2-feats">
             <span className="rv2-feat">
               <span className="rv2-feat-icon blue">
@@ -294,22 +396,33 @@ export default function ReportsPage() {
                 }}
               />
             </label>
-            <div className="reports-view-toggle" role="group" aria-label={t('toggleView')}>
+            {/* 网格/列表切换：与项目列表页同款组件 */}
+            <div className="tabs tabs--icon" role="group" aria-label={t('toggleView')}>
               <button
                 type="button"
-                className={view === 'grid' ? 'active' : ''}
+                className={`tabs-item ${view === 'grid' ? 'active' : ''}`}
                 title={t('gridView')}
                 onClick={() => setView('grid')}
               >
-                <ViewIcon mode="grid" />
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                  <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                  <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                  <rect x="14" y="14" width="7" height="7" rx="1.5" />
+                </svg>
               </button>
               <button
                 type="button"
-                className={view === 'list' ? 'active' : ''}
+                className={`tabs-item ${view === 'list' ? 'active' : ''}`}
                 title={t('listView')}
                 onClick={() => setView('list')}
               >
-                <ViewIcon mode="list" />
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                  <path d="M8 6h13M8 12h13M8 18h13" />
+                  <circle cx="3.5" cy="6" r="1" fill="currentColor" stroke="none" />
+                  <circle cx="3.5" cy="12" r="1" fill="currentColor" stroke="none" />
+                  <circle cx="3.5" cy="18" r="1" fill="currentColor" stroke="none" />
+                </svg>
               </button>
             </div>
           </div>
@@ -320,99 +433,13 @@ export default function ReportsPage() {
           <div className="reports-table">
             <div className="rv2-table-head">
               <span>{t('colName')}</span>
-              <span>{t('colProjectPage')}</span>
+              <span>{productMode ? t('colPage') : t('colProjectPage')}</span>
               <span>{t('colIssueCount')}</span>
               <span>{t('colTime')}</span>
               <span>{t('colStatus')}</span>
             </div>
             {pageGroups.length > 0 ? (
-              pageGroups.map((g) => {
-                const open = expanded.has(g.key)
-                const latest = g.versions[0]
-                const pg = pages.find((p) => p.id === g.pageId)
-                const accepted = !!pg?.accepted
-                return (
-                  <div key={g.key} className="reports-group-wrap">
-                    <div
-                      className={`rv2-table-row reports-row group${open ? ' open' : ''}`}
-                      role="button"
-                      tabIndex={0}
-                      title={open ? t('collapseVersionsTip') : t('expandVersionsTip')}
-                      onClick={() => toggle(g.key)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault()
-                          toggle(g.key)
-                        }
-                      }}
-                    >
-                      <span className="reports-cell-name">
-                        <ReportThumb name={g.pageName} />
-                        <span className="reports-name-text">
-                          <b>
-                            {g.pageName}
-                            <em className="reports-ver-count">{t('versionCount', { n: g.versions.length })}</em>
-                          </b>
-                          <i>{g.versions[0].name || t('reportNameFallback', { page: g.pageName })}</i>
-                        </span>
-                      </span>
-                      <span className="rv2-cell-path">
-                        <b>{projectName(g.projectId)}</b>
-                        <i>{pg ? <Link to={`/project/${g.projectId}/page/${pg.id}`}>{g.pageName}</Link> : t('pageDeleted')}</i>
-                      </span>
-                      <span className="reports-cell-issues">{latest.total}</span>
-                      <span className="rv2-cell-time">{fmtTime(latest.createdAt)}</span>
-                      <span className="reports-cell-status">
-                        <span className={`reports-status ${accepted ? 'done' : 'doing'}`}>
-                          {accepted ? t('statusDone') : t('statusDoing')}
-                        </span>
-                      </span>
-                    </div>
-
-                    {/* 版本行（展开时显示，旧→新；点击整行打开该版本） */}
-                    {open && (
-                      <div className="reports-ver-list">
-                        {[...g.versions].reverse().map((v) => (
-                          <div
-                            key={v.id}
-                            className="rv2-table-row reports-row ver"
-                            role="button"
-                            tabIndex={0}
-                            title={v.filePath ? t('openVersionTip') : t('versionNoPathTip')}
-                            onClick={() => void openReport(v)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault()
-                                void openReport(v)
-                              }
-                            }}
-                          >
-                            <span className="reports-cell-name">
-                              <span className={`reports-ver-badge${v.ver === 1 ? ' latest' : ''}`}>
-                                {v.ver === 1 ? t('latest') : `V${v.ver}`}
-                              </span>
-                              <span className="reports-name-text">
-                                <b>{v.name || t('versionNameFallback', { n: v.ver })}</b>
-                              </span>
-                            </span>
-                            <span className="rv2-cell-path">
-                              <b>{projectName(v.projectId)}</b>
-                              <i>{pg ? <Link to={`/project/${v.projectId}/page/${pg.id}`} onClick={(e) => e.stopPropagation()}>{g.pageName}</Link> : t('pageDeleted')}</i>
-                            </span>
-                            <span className="reports-cell-issues">{v.total}</span>
-                            <span className="rv2-cell-time">{fmtTime(v.createdAt)}</span>
-                            <span className="reports-cell-status">
-                              <span className={`reports-status ${accepted ? 'done' : 'doing'}`}>
-                                {accepted ? t('statusDone') : t('statusDoing')}
-                              </span>
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )
-              })
+              pageGroups.map(renderGroup)
             ) : (
               <p className="rv2-empty">
                 {groups.length === 0
@@ -430,16 +457,22 @@ export default function ReportsPage() {
                 return (
                   <div key={g.key} className="reports-grid-item">
                     <div className="reports-grid-head">
-                      <ReportThumb name={g.pageName} large />
                       <div className="reports-grid-title">
                         <b title={g.pageName}>{g.pageName}</b>
                         <i>
-                          {projectName(g.projectId)} · {t('versionCount', { n: g.versions.length })}
+                          {/* 产品模式仅显示版本数 */}
+                          {productMode ? t('versionCount', { n: g.versions.length }) : (
+                            <>{projectName(g.projectId)} · {t('versionCount', { n: g.versions.length })}</>
+                          )}
                         </i>
                       </div>
-                      <span className={`reports-status ${pages.find((p) => p.id === g.pageId)?.accepted ? 'done' : 'doing'}`}>
-                        {pages.find((p) => p.id === g.pageId)?.accepted ? t('statusDone') : t('statusDoing')}
-                      </span>
+                      {productMode ? (
+                        <span>—</span>
+                      ) : (
+                        <span className={`badge ${pages.find((p) => p.id === g.pageId)?.accepted ? 'badge-success' : 'badge-accent'} badge-lg`}>
+                          {pages.find((p) => p.id === g.pageId)?.accepted ? t('statusDone') : t('statusDoing')}
+                        </span>
+                      )}
                     </div>
                     <div className="reports-grid-meta">
                       <span className="reports-cell-issues">
@@ -466,7 +499,7 @@ export default function ReportsPage() {
                     </div>
                     {expanded.has(g.key) && (
                       <div className="reports-grid-vers">
-                        {[...g.versions].reverse().map((v) => (
+                        {g.versions.map((v, vi) => (
                           <button
                             key={v.id}
                             type="button"
@@ -475,8 +508,8 @@ export default function ReportsPage() {
                             title={v.filePath ? t('openVerTip') : t('versionNoPathReexport')}
                             onClick={() => void openReport(v)}
                           >
-                            <span className={`reports-ver-badge${v.ver === 1 ? ' latest' : ''}`}>
-                              {v.ver === 1 ? t('latest') : `V${v.ver}`}
+                            <span className={`badge badge-accent reports-ver-badge${vi === 0 ? ' latest' : ''}`}>
+                              {vi === 0 ? t('latest') : `V${v.ver}`}
                             </span>
                             <i>{fmtTime(v.createdAt)}</i>
                             <b>{t('issueCountShort', { n: v.total })}</b>

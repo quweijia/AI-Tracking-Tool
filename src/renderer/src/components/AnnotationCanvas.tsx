@@ -42,6 +42,12 @@ interface Props {
   spacePan?: boolean
   /** 测量换算用逻辑宽度（图片原始宽 / 该值 = 高清采样倍率），不传按图片原始像素 */
   logicalWidth?: number
+  /** 吸色标注只显示色值（产品标注模式）：不带「设计/截图」前缀（UI 走查对比双画布仍用前缀区分来源） */
+  pickerHexOnly?: boolean
+  /** 吸色同步取样：另一画布（设计稿/截图）上报的归一化采样点，本画布镜像渲染放大镜（各图按自身尺寸取样） */
+  mirrorLoupe?: { nx: number; ny: number } | null
+  /** 吸色同步取样：本画布放大镜采样点变化/隐藏时上报（归一化坐标），由父层按「吸色工具 + 同步取样」门控 */
+  onPickerPixel?: (p: { nx: number; ny: number } | null) => void
 }
 
 /** 拖拽过程中把坐标限制在 0~1 */
@@ -58,10 +64,13 @@ const rgbToHex = (r: number, g: number, b: number) =>
 const estTextWidth = (text: string, fontSize: number) =>
   [...text].reduce((w, ch) => w + (ch.charCodeAt(0) > 0x2e80 ? fontSize : fontSize * 0.62), 0)
 
+/** 点位序号徽章宽度：随位数自适应加宽（2/3 位数），左右各留 5px；单数 18px 保持正圆 */
+const numBadgeW = (num: number): number => Math.max(18, Math.ceil(estTextWidth(String(num), 12) + 10))
+
 const SEVERITIES = ['suggestion', 'minor', 'major'] as const
 
-/** 浅色底（如白色）时点位序号自动切深色字，避免与底色融合；深色底用白字 */
-function inkFor(hex: string): string {
+/** 浅色底（如白色）时点位序号自动切深色字，避免与底色融合；深色底用白字（报告/文档导出徽章共用） */
+export function inkFor(hex: string): string {
   const h = hex.replace('#', '')
   const v = h.length === 3
     ? h.split('').map((c) => c + c).join('')
@@ -88,13 +97,16 @@ export default function AnnotationCanvas({
   focusId,
   overlay,
   spacePan,
-  logicalWidth
+  logicalWidth,
+  pickerHexOnly,
+  mirrorLoupe,
+  onPickerPixel
 }: Props) {
   const { t } = useTranslation('annotationCanvas')
   const svgRef = useRef<SVGSVGElement>(null)
   const imgRef = useRef<HTMLImageElement>(null)
-  /** 取样用的离屏画布缓存（按 img.src 失效） */
-  const sampleCanvasRef = useRef<{ src: string; canvas: HTMLCanvasElement } | null>(null)
+  /** 取样用整图 ImageData 缓存（一次性 getImageData，之后只查数组；按 img.src 失效） */
+  const sampleDataRef = useRef<{ src: string; w: number; h: number; data: Uint8ClampedArray } | null>(null)
   const [draft, setDraft] = useState<NormalizedRect | null>(null)
   const [draftArrow, setDraftArrow] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   /** 测量工具：已点下的第一点 + 预览终点（第二次点击完成测量） */
@@ -102,6 +114,8 @@ export default function AnnotationCanvas({
   /** 拖拽移动中的标注（渲染时用临时坐标覆盖原位置） */
   const [dragPos, setDragPos] = useState<{ id: string; rect: NormalizedRect } | null>(null)
 
+  /** 标记当前 mousedown 已被测量完成消费（阻止同一次点击在冒泡阶段开启新测量） */
+  const measureDoneRef = useRef(false)
   /** 画布可视尺寸（测量⊥短线法向量换算用）：渲染期读 getBoundingClientRect 在 tab 隐藏/过渡态会拿到 0， */
   /** 改由 ResizeObserver 同步——隐藏→显示尺寸从 0 变化时自动触发重渲染，恢复正确短线长度 */
   const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 })
@@ -117,56 +131,116 @@ export default function AnnotationCanvas({
     return () => ro.disconnect()
   }, [])
 
-  /** 放大镜：鼠标视口坐标 + 画布视口矩形（null = 不显示） */
+  /** 放大镜：光标视口坐标（圆跟手移动）+ 锁定图像整数像素（采样点逐格步进）+ 画布视口矩形 */
   const [loupe, setLoupe] = useState<{
     cx: number
     cy: number
+    px: number
+    py: number
     rect: { left: number; top: number; width: number; height: number }
   } | null>(null)
-  const loupeRafRef = useRef(0)
-  const loupePendingRef = useRef<{
-    cx: number
-    cy: number
-    rect: { left: number; top: number; width: number; height: number }
-  } | null>(null)
+  /** 锁定的采样像素：逐像素步进动画趋近光标像素（缩小显示时 1 屏幕像素跨多个图像像素，
+   *  直接映射会让放大镜内容一次跳好几格）；点击落点直接吸附，保证测量端点/取色与光标严格重合 */
+  const curPxRef = useRef<{ px: number; py: number } | null>(null)
+  /** 步进目标：光标下的精确图像像素 */
+  const targetPxRef = useRef<{ px: number; py: number } | null>(null)
+  /** 步进动画帧句柄 */
+  const loupeRafRef = useRef<number | null>(null)
+  const lastClientRef = useRef<{ x: number; y: number } | null>(null)
+  const loupeRectRef = useRef<{ left: number; top: number; width: number; height: number } | null>(null)
+
+  /** 吸色同步取样回调的镜像（publishLoupe/hideLoupe 在事件闭包里调用，ref 保持始终最新） */
+  const onPickerPixelRef = useRef<Props['onPickerPixel']>(undefined)
+  onPickerPixelRef.current = onPickerPixel
+
+  /** 放大镜发布：光标坐标（圆跟手）+ 锁定像素（采样点）+ 图像显示盒 */
+  const publishLoupe = () => {
+    const cur = curPxRef.current
+    const rect = loupeRectRef.current
+    const cursor = lastClientRef.current
+    if (!cur || !rect || !cursor) return
+    setLoupe({ cx: cursor.x, cy: cursor.y, px: cur.px, py: cur.py, rect: { ...rect } })
+    // 吸色同步取样：把采样点归一化后上报（对侧画布按自身图片尺寸取样镜像显示）
+    const img = imgRef.current
+    if (onPickerPixelRef.current && img?.naturalWidth && img.naturalHeight) {
+      onPickerPixelRef.current({ nx: (cur.px + 0.5) / img.naturalWidth, ny: (cur.py + 0.5) / img.naturalHeight })
+    }
+  }
+
+  /** 停止步进动画（吸附/隐藏/移出画布时调用） */
+  const stopLoupeStep = () => {
+    if (loupeRafRef.current !== null) {
+      cancelAnimationFrame(loupeRafRef.current)
+      loupeRafRef.current = null
+    }
+  }
+
+  /** 隐藏放大镜并重置锁定状态（移出画布/ESC/右键/切图）：下次进入直接对齐光标像素 */
+  const hideLoupe = () => {
+    stopLoupeStep()
+    targetPxRef.current = null
+    curPxRef.current = null
+    lastClientRef.current = null
+    loupeRectRef.current = null
+    setLoupe(null)
+    onPickerPixelRef.current?.(null)
+  }
   /** 测量/吸色工具且非平移态时启用放大镜 */
   const loupeActive = (tool === 'measure' || tool === 'picker') && !panMode && !spacePan
 
-  // 切换工具/卸载时清理测量半成品
+  // 切换工具/卸载时清理测量半成品（卸载同时停掉放大镜步进动画，避免 rAF 泄漏）
   useEffect(() => {
     setDraftMeasure(null)
+    measureDoneRef.current = false
   }, [tool])
-  useEffect(() => () => setDraftMeasure(null), [])
+  useEffect(
+    () => () => {
+      setDraftMeasure(null)
+      stopLoupeStep()
+    },
+    []
+  )
 
-  /** 读取图上指定归一化坐标的像素颜色（hex），失败返回 null */
-  const sampleColor = (nx: number, ny: number): string | null => {
+  // 切换图片：像素锁定与取样缓存全部重置
+  useEffect(() => {
+    hideLoupe()
+    sampleDataRef.current = null
+  }, [dataUrl])
+
+  /** 构建整图 ImageData 缓存（一次性 getImageData，之后只查数组；按 img.src 失效） */
+  const ensureSampleData = () => {
     const img = imgRef.current
     if (!img || !img.naturalWidth || !img.naturalHeight) return null
-    let entry = sampleCanvasRef.current
-    if (!entry || entry.src !== img.src) {
-      const canvas = document.createElement('canvas')
-      canvas.width = img.naturalWidth
-      canvas.height = img.naturalHeight
-      const ctx = canvas.getContext('2d', { willReadFrequently: true })
-      if (!ctx) return null
-      try {
-        ctx.drawImage(img, 0, 0)
-      } catch {
-        return null
-      }
-      entry = { src: img.src, canvas }
-      sampleCanvasRef.current = entry
-    }
-    const ctx = entry.canvas.getContext('2d', { willReadFrequently: true })
+    let entry = sampleDataRef.current
+    if (entry && entry.src === img.src && entry.w === img.naturalWidth) return entry
+    const canvas = document.createElement('canvas')
+    canvas.width = img.naturalWidth
+    canvas.height = img.naturalHeight
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
     if (!ctx) return null
-    const px = Math.min(img.naturalWidth - 1, Math.max(0, Math.round(nx * img.naturalWidth)))
-    const py = Math.min(img.naturalHeight - 1, Math.max(0, Math.round(ny * img.naturalHeight)))
     try {
-      const d = ctx.getImageData(px, py, 1, 1).data
-      return rgbToHex(d[0], d[1], d[2])
+      ctx.drawImage(img, 0, 0)
+      entry = {
+        src: img.src,
+        w: canvas.width,
+        h: canvas.height,
+        data: ctx.getImageData(0, 0, canvas.width, canvas.height).data
+      }
     } catch {
       return null
     }
+    sampleDataRef.current = entry
+    return entry
+  }
+
+  /** 读取图上指定整数像素的颜色（hex），失败返回 null */
+  const sampleColorAtPx = (px: number, py: number): string | null => {
+    const entry = ensureSampleData()
+    if (!entry) return null
+    const cx = Math.min(entry.w - 1, Math.max(0, Math.round(px)))
+    const cy = Math.min(entry.h - 1, Math.max(0, Math.round(py)))
+    const o = (cy * entry.w + cx) * 4
+    return rgbToHex(entry.data[o], entry.data[o + 1], entry.data[o + 2])
   }
 
   /** 归一化矢量 → 实际像素距离（按图片原始尺寸；传 logicalWidth 时换算为逻辑尺寸，抵消高清采样倍率） */
@@ -231,50 +305,121 @@ export default function AnnotationCanvas({
     }
   }
 
-  /** 放大镜跟随：rAF 节流，mousemove 只记位置，每帧最多更新一次 */
-  const handleLoupeMove = (e: React.MouseEvent) => {
+  /** 显示坐标 → 图像原始整数像素（floor + 钳制；floor 保证一个显示像素只对应唯一的图像像素） */
+  const toImagePixel = (clientX: number, clientY: number): { px: number; py: number } | null => {
+    const img = imgRef.current
     const rect = svgRef.current?.getBoundingClientRect()
-    if (!rect) return
-    loupePendingRef.current = {
-      cx: e.clientX,
-      cy: e.clientY,
-      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+    if (!img || !img.naturalWidth || !img.naturalHeight || !rect?.width || !rect?.height) return null
+    const px = Math.floor(((clientX - rect.left) * img.naturalWidth) / rect.width)
+    const py = Math.floor(((clientY - rect.top) * img.naturalHeight) / rect.height)
+    return {
+      px: Math.min(img.naturalWidth - 1, Math.max(0, px)),
+      py: Math.min(img.naturalHeight - 1, Math.max(0, py))
     }
-    if (loupeRafRef.current) return
-    loupeRafRef.current = requestAnimationFrame(() => {
-      loupeRafRef.current = 0
-      if (loupePendingRef.current) setLoupe(loupePendingRef.current)
-    })
   }
 
-  /** 移出画布：放大镜隐藏 */
+  /** 图像整数像素 → 归一化坐标（取像素中心 +0.5，与采样/测量换算同一约定） */
+  const pxToNormalized = (p: { px: number; py: number }): { x: number; y: number } | null => {
+    const img = imgRef.current
+    if (!img || !img.naturalWidth || !img.naturalHeight) return null
+    return {
+      x: clamp01((p.px + 0.5) / img.naturalWidth),
+      y: clamp01((p.py + 0.5) / img.naturalHeight)
+    }
+  }
+
+  /** 步进动画帧：锁定像素朝光标像素推进（间隔大按比例加速追赶，间隔小则严格一格一格走），
+   *  每帧发布放大镜刷新内容；收敛到位自动停止，鼠标静止后无残留偏移 */
+  const loupeStepFrame = () => {
+    loupeRafRef.current = null
+    const cur = curPxRef.current
+    const target = targetPxRef.current
+    if (!cur || !target || (cur.px === target.px && cur.py === target.py)) return
+    const adv = (c: number, t: number) => {
+      const gap = Math.abs(t - c)
+      if (!gap) return c
+      return c + Math.sign(t - c) * Math.min(gap, Math.max(1, Math.floor(gap / 6)))
+    }
+    curPxRef.current = { px: adv(cur.px, target.px), py: adv(cur.py, target.py) }
+    publishLoupe()
+    loupeRafRef.current = requestAnimationFrame(loupeStepFrame)
+  }
+
+  /** 指针事件 → 锁定像素 + 逐像素步进：目标恒为光标下的精确图像像素（floor 保证唯一映射），
+   *  锁定像素经 rAF 动画逐格趋近——测量/吸色放大镜随鼠标一个一个像素移动，不再一次跨多格；
+   *  snap=true（点击落点）跳过动画直接吸附，保证测量端点/取色像素与光标严格重合 */
+  const lockPixelFromEvent = (clientX: number, clientY: number, snap = false): { px: number; py: number } | null => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    const t = toImagePixel(clientX, clientY)
+    if (!rect?.width || !rect?.height || !t) return null
+    loupeRectRef.current = { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+    lastClientRef.current = { x: clientX, y: clientY }
+    if (snap || !curPxRef.current) {
+      stopLoupeStep()
+      targetPxRef.current = null
+      curPxRef.current = { ...t }
+      publishLoupe()
+      return { ...t }
+    }
+    const cur = curPxRef.current
+    // 显示比非整数时 floor 映射会跳像素（300% 缩放下 1 屏幕px 仍跨 ~1.3 图像px，部分像素鼠标停不上去）：
+    // 小间隔（≤4 图像px）把步进目标钳到 ±1——放大镜一格一格走、停在任何像素上都稳；
+    // 想去的像素被跳过时微移一下走一格即可；大间隔不钳制，保持加速追赶不拖沓
+    const gx = Math.abs(t.px - cur.px)
+    const gy = Math.abs(t.py - cur.py)
+    if (gx <= 4 && gy <= 4) {
+      targetPxRef.current = {
+        px: cur.px + Math.sign(t.px - cur.px),
+        py: cur.py + Math.sign(t.py - cur.py)
+      }
+    } else {
+      targetPxRef.current = { ...t }
+    }
+    publishLoupe()
+    if (loupeRafRef.current === null) loupeRafRef.current = requestAnimationFrame(loupeStepFrame)
+    return { ...curPxRef.current }
+  }
+
+  /** 放大镜跟随：更新步进目标（光标像素），锁定像素由动画逐像素趋近 */
+  const handleLoupeMove = (e: React.MouseEvent) => {
+    lockPixelFromEvent(e.clientX, e.clientY)
+  }
+
+  /** 移出画布：放大镜隐藏并重置锁定状态 */
   const handleLoupeLeave = () => {
-    if (loupeRafRef.current) {
-      cancelAnimationFrame(loupeRafRef.current)
-      loupeRafRef.current = 0
-    }
-    loupePendingRef.current = null
-    setLoupe(null)
+    hideLoupe()
   }
 
-  // 卸载时清理未执行的 rAF
-  useEffect(
-    () => () => {
-      if (loupeRafRef.current) cancelAnimationFrame(loupeRafRef.current)
-    },
-    []
-  )
-
-  // ESC / 右键：隐藏放大镜（右键在画布内时拦截默认菜单）
+  // ESC 隐藏放大镜 / 右键拦截菜单 / 方向键逐像素微调：
+  // 图片显示尺寸小于原始尺寸时，光标移动 1px 对应多个图像像素，鼠标无法逐像素选择——
+  // 方向键每次移动 1 个图像像素（Shift 加速 10px），移动后点击/取样即用微调后的像素
   const loupeShown = loupe !== null
   useEffect(() => {
     if (!loupeShown) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setLoupe(null)
+      if (e.key === 'Escape') {
+        hideLoupe()
+        return
+      }
+      const step = e.shiftKey ? 10 : 1
+      const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0
+      const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0
+      if (!dx && !dy) return
+      e.preventDefault()
+      const img = imgRef.current
+      const cur = curPxRef.current
+      if (!img?.naturalWidth || !img.naturalHeight || !cur) return
+      stopLoupeStep()
+      targetPxRef.current = null
+      curPxRef.current = {
+        px: Math.min(img.naturalWidth - 1, Math.max(0, cur.px + dx)),
+        py: Math.min(img.naturalHeight - 1, Math.max(0, cur.py + dy))
+      }
+      publishLoupe()
     }
     const onCtx = (e: MouseEvent) => {
       if (svgRef.current && e.target instanceof Node && svgRef.current.contains(e.target)) e.preventDefault()
-      setLoupe(null)
+      hideLoupe()
     }
     window.addEventListener('keydown', onKey)
     window.addEventListener('contextmenu', onCtx)
@@ -287,29 +432,55 @@ export default function AnnotationCanvas({
   const handleMouseDown = (e: React.MouseEvent) => {
     // 点击已有标注（各形状的命中元素会 stopPropagation，不会走到这里）
     if (!tool || draft || draftArrow) return
+    // 测量刚完成的同一次 mousedown 已被消费（捕获阶段），不再开启新测量
+    if (measureDoneRef.current) {
+      measureDoneRef.current = false
+      e.preventDefault()
+      return
+    }
     e.preventDefault()
+    // 测量/吸色按下：锁定像素直接吸附光标下的精确像素（终止步进动画），端点/取色与光标严格重合
+    if (loupeActive) lockPixelFromEvent(e.clientX, e.clientY, true)
     const start = toNormalized(e.clientX, e.clientY)
 
     if (tool === 'measure') {
       // 两点测量：第一点按下开始，移动预览，第二点按下完成
+      // 起点/终点均取光标下像素的中心：与放大镜十字准星严格对齐，不产生偏移错位
       if (!draftMeasure) {
-        setDraftMeasure({ x1: start.x, y1: start.y, x2: start.x, y2: start.y })
+        const sp = curPxRef.current ?? toImagePixel(e.clientX, e.clientY)
+        const sN = (sp && pxToNormalized(sp)) || start
+        setDraftMeasure({ x1: sN.x, y1: sN.y, x2: sN.x, y2: sN.y })
         const move = (ev: MouseEvent) => {
-          const cur = toNormalized(ev.clientX, ev.clientY)
+          const p = lockPixelFromEvent(ev.clientX, ev.clientY)
+          const cur = (p && pxToNormalized(p)) || toNormalized(ev.clientX, ev.clientY)
           // 按住 Shift 吸附到 0/30/45/60/90°（含镜像方向）
-          const end = ev.shiftKey ? snapMeasure(start, cur) : cur
-          setDraftMeasure({ x1: start.x, y1: start.y, x2: end.x, y2: end.y })
+          const end = ev.shiftKey ? snapMeasure(sN, cur) : cur
+          setDraftMeasure({ x1: sN.x, y1: sN.y, x2: end.x, y2: end.y })
         }
         const down = (ev: MouseEvent) => {
           window.removeEventListener('mousemove', move)
           window.removeEventListener('mousedown', down, true)
-          const cur = toNormalized(ev.clientX, ev.clientY)
-          const end = ev.shiftKey ? snapMeasure(start, cur) : cur
-          if (Math.hypot(end.x - start.x, end.y - start.y) > 0.005) {
+          // 阻止本次按下默认行为：间隔较近的两次点击会被浏览器判为双击选词/拖选，导致整页文字被选中
+          ev.preventDefault()
+          // 仅当完成点击落在画布内才置消费旗标——画布外完成时冒泡不会进画布，
+          // 旗标残留会吞掉下一次测量的第一下（表现为「点第一下没反应」）
+          if (svgRef.current && ev.target instanceof Node && svgRef.current.contains(ev.target)) {
+            measureDoneRef.current = true // 标记当前点击已被消费，阻止冒泡阶段开启新测量
+            // 兜底自动清除：完成点击若落在已有标注上（stopPropagation 拦截冒泡），旗标无人消费而
+            // 残留，下一次测量的第一下会被吞掉；同一次点击的冒泡处理在同一任务内同步执行，
+            // 仍能看到旗标，不受本次清除影响
+            window.setTimeout(() => {
+              measureDoneRef.current = false
+            }, 0)
+          }
+          const p = lockPixelFromEvent(ev.clientX, ev.clientY, true)
+          const cur = (p && pxToNormalized(p)) || toNormalized(ev.clientX, ev.clientY)
+          const end = ev.shiftKey ? snapMeasure(sN, cur) : cur
+          if (Math.hypot(end.x - sN.x, end.y - sN.y) > 0.005) {
             onQuickCreate?.(
-              { x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y },
+              { x: sN.x, y: sN.y, width: end.x - sN.x, height: end.y - sN.y },
               targetImage,
-              { measurePx: measurePx(end.x - start.x, end.y - start.y) }
+              { measurePx: measurePx(end.x - sN.x, end.y - sN.y) }
             )
           }
           setDraftMeasure(null)
@@ -332,8 +503,12 @@ export default function AnnotationCanvas({
         window.removeEventListener('mousemove', move)
         window.removeEventListener('mouseup', up)
         if (moved) return
-        const hex = sampleColor(start.x, start.y)
-        if (hex) onQuickCreate?.({ x: start.x, y: start.y, width: 0, height: 0 }, targetImage, { colorHex: hex })
+        // 取锁定像素（同像素内微动不改变取样点），兜底用按下点换算；标注位置取像素中心
+        const p = curPxRef.current ?? toImagePixel(e.clientX, e.clientY)
+        const pos = p ? pxToNormalized(p) : null
+        if (!p || !pos) return
+        const hex = sampleColorAtPx(p.px, p.py)
+        if (hex) onQuickCreate?.({ x: pos.x, y: pos.y, width: 0, height: 0 }, targetImage, { colorHex: hex })
       }
       window.addEventListener('mousemove', move)
       window.addEventListener('mouseup', up)
@@ -492,6 +667,18 @@ export default function AnnotationCanvas({
           >
             <path d="M 0 0 L 10 5 L 0 10 z" className="arrow-head arrow-draft" />
           </marker>
+          {/* 已修复状态专用箭头：线随状态变绿，三角头同步变绿 */}
+          <marker
+            id={`ah-${targetImage}-fixed`}
+            viewBox="0 0 10 10"
+            refX="8"
+            refY="5"
+            markerWidth="4.5"
+            markerHeight="4.5"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" className="arrow-head arrow-fixed" />
+          </marker>
           {/* 自定义颜色的箭头 marker（每种颜色一个） */}
           {[...new Set(issues.filter((i) => i.color && i.status !== 'fixed').map((i) => i.color!))].map(
             (c) => (
@@ -520,6 +707,8 @@ export default function AnnotationCanvas({
           const sevCls = `severity-${issue.severity}`
           const flashCls = issue.id === flashId ? ' issue-flash' : ''
           const focusCls = issue.id === focusId ? ' issue-focus' : ''
+          // 备选问题未勾选：画布以虚线幽灵框显示（样式同 AI 候选），点击可编辑、清单卡片点击可聚焦定位
+          const ghostCls = issue.level === 'optional' && issue.optionalChecked !== true ? ' issue-ghost' : ''
           // 自定义颜色：仅未修复状态生效（已修复保持绿色状态色）
           const useCustom = !!issue.color && issue.status !== 'fixed'
           // 拖拽移动中：用临时坐标覆盖原位置
@@ -531,11 +720,14 @@ export default function AnnotationCanvas({
             return (
               <g key={issue.id}>
                 <circle className="anno-point-hit" cx={pct(R.x)} cy={pct(R.y)} r={16} onMouseDown={editHandler(issue)} />
-                <circle
+                {/* 序号徽章：圆角胶囊随位数自适应加宽（rx=9 两端保持半圆） */}
+                <rect
                   className={`anno-point ${sevCls} ${statusCls}${flashCls}${focusCls}`}
-                  cx={pct(R.x)}
-                  cy={pct(R.y)}
-                  r={9}
+                  x={R.x * canvasSize.w - numBadgeW(num) / 2}
+                  y={R.y * canvasSize.h - 9}
+                  width={numBadgeW(num)}
+                  height={18}
+                  rx={9}
                   pointerEvents="none"
                   style={useCustom ? { fill: issue.color! } : undefined}
                 />
@@ -568,9 +760,11 @@ export default function AnnotationCanvas({
                   x2={pct(ex)}
                   y2={pct(ey)}
                   markerEnd={
-                    useCustom
-                      ? `url(#ah-c-${targetImage}-${issue.color!.slice(1)})`
-                      : `url(#ah-${targetImage}-${issue.severity})`
+                    issue.status === 'fixed'
+                      ? `url(#ah-${targetImage}-fixed)`
+                      : useCustom
+                        ? `url(#ah-c-${targetImage}-${issue.color!.slice(1)})`
+                        : `url(#ah-${targetImage}-${issue.severity})`
                   }
                   pointerEvents="none"
                   style={useCustom ? { stroke: issue.color! } : undefined}
@@ -598,20 +792,77 @@ export default function AnnotationCanvas({
           }
 
           if (shape === 'text') {
-            // 贴右边缘时文字改向左侧延伸，避免超出画板
-            const flip = R.x * canvasW + estTextWidth(issue.description, 14) + 4 > canvasW
+            // 贴右边缘时文字改向左侧延伸，避免超出画板（描述含 \n 时按最长行估算宽度）
+            const lines = issue.description.split('\n')
+            const textW = Math.max(0, ...lines.map((ln) => estTextWidth(ln, 14)))
+            const flip = R.x * canvasW + textW + 4 > canvasW
+            // 产品标注：参考走查 point 样式在锚点画序号圆点，明确标注的是哪个点
+            const withPoint = pickerHexOnly
             return (
-              <text
-                key={issue.id}
-                className={`anno-text ${sevCls} ${statusCls}${flashCls}${focusCls}`}
-                x={pct(R.x)}
-                y={pct(R.y)}
-                textAnchor={flip ? 'end' : 'start'}
-                onMouseDown={editHandler(issue)}
-                style={useCustom ? { fill: issue.color! } : undefined}
-              >
-                {issue.description}
-              </text>
+              <g key={issue.id}>
+                {withPoint && (
+                  <>
+                    <circle className="anno-point-hit" cx={pct(R.x)} cy={pct(R.y)} r={16} onMouseDown={editHandler(issue)} />
+                    {/* 序号徽章：圆角胶囊随位数自适应加宽 */}
+                    <rect
+                      className={`anno-point ${sevCls} ${statusCls}${flashCls}${focusCls}`}
+                      x={R.x * canvasSize.w - numBadgeW(num) / 2}
+                      y={R.y * canvasSize.h - 9}
+                      width={numBadgeW(num)}
+                      height={18}
+                      rx={9}
+                      pointerEvents="none"
+                      style={useCustom ? { fill: issue.color! } : undefined}
+                    />
+                    <text
+                      className={`anno-num point-num ${statusCls}`}
+                      x={pct(R.x)}
+                      y={pct(R.y)}
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      pointerEvents="none"
+                      style={useCustom ? { fill: inkFor(issue.color!) } : undefined}
+                    >
+                      {num}
+                    </text>
+                  </>
+                )}
+                {/* 序号：走查模式文字向右延伸时放起点左侧，向左延伸时放起点右侧（与测量标注序号同款样式） */}
+                {!withPoint && (
+                  <text
+                    className={`anno-num ${sevCls}`}
+                    x={pct(R.x)}
+                    y={pct(R.y)}
+                    dx={flip ? 10 : -10}
+                    textAnchor={flip ? 'start' : 'end'}
+                    pointerEvents="none"
+                  >
+                    {num}
+                  </text>
+                )}
+                <text
+                  className={`anno-text ${sevCls} ${statusCls}${flashCls}${focusCls}`}
+                  x={pct(R.x)}
+                  y={pct(R.y)}
+                  dx={withPoint ? (flip ? -13 : 13) : flip ? 10 : -10}
+                  textAnchor={flip ? 'end' : 'start'}
+                  dominantBaseline={withPoint ? 'central' : undefined}
+                  onMouseDown={editHandler(issue)}
+                  style={useCustom ? { fill: issue.color! } : undefined}
+                >
+                  {/* 按 \n 拆行渲染：产品模式整块相对点位垂直居中，走查模式保持末行基线不变；空行用空格占位保证行距推进 */}
+                  {lines.map((ln, idx) => (
+                    <tspan
+                      key={idx}
+                      x={pct(R.x)}
+                      dx={withPoint ? (flip ? -13 : 13) : flip ? 10 : -10}
+                      dy={idx === 0 ? (withPoint ? -((lines.length - 1) / 2) * 18 : -(lines.length - 1) * 18) : 18}
+                    >
+                      {ln || ' '}
+                    </tspan>
+                  ))}
+                </text>
+              </g>
             )
           }
 
@@ -636,7 +887,7 @@ export default function AnnotationCanvas({
                 {measureTicks(R.x, R.y, ex, ey).map((t, i) => (
                   <line
                     key={i}
-                    className={`anno-measure-line ${statusCls}${flashCls}${focusCls}`}
+                    className={`anno-measure-line ${sevCls} ${statusCls}${flashCls}${focusCls}`}
                     x1={pct(t.x1)}
                     y1={pct(t.y1)}
                     x2={pct(t.x2)}
@@ -683,12 +934,18 @@ export default function AnnotationCanvas({
           }
 
           if (shape === 'picker') {
-            // 按画布类型只显示对应色值：设计稿显示 sampleA，开发截图显示 sampleB
+            // 按画布类型只显示对应色值：设计稿显示 sampleA，开发截图显示 sampleB；
+            // pickerHexOnly 模式（产品标注）去掉「设计/截图」前缀，只保留色值
             const hexValue = targetImage === 'design' ? issue.sampleA : issue.sampleB
-            const hexLabel = targetImage === 'design' ? t('pickerLabelDesign', { hex: hexValue }) : t('pickerLabelShot', { hex: hexValue })
-            const displayText = hexValue ? hexLabel : (issue.description.length > 40 ? `${issue.description.slice(0, 40)}…` : issue.description)
+            const displayText = hexValue
+              ? (pickerHexOnly ? hexValue : (targetImage === 'design' ? t('pickerLabelDesign', { hex: hexValue }) : t('pickerLabelShot', { hex: hexValue })))
+              : (issue.description.length > 40 ? `${issue.description.slice(0, 40)}…` : issue.description)
+            // 点位色块：外侧描边与取样色形成对比（白色取样→深色描边，深色取样→白色描边），浅底/深底都可见
+            const chipFill = hexValue || issue.color || (targetImage === 'design' ? '#3b82f6' : '#ef4444')
             // 贴右边缘时色值翻转到点位左侧，避免超出画板
             const flip = R.x * canvasW + 11 + estTextWidth(displayText, 12) + 4 > canvasW
+            // 产品标注：色块圆点参考走查 point 样式放大并内嵌序号，明确取样的是哪个点
+            const withPoint = pickerHexOnly
             return (
               <g key={issue.id}>
                 {/* 大热区：点击打开编辑弹窗 */}
@@ -699,23 +956,64 @@ export default function AnnotationCanvas({
                   r={18}
                   onMouseDown={editHandler(issue)}
                 />
-                {/* 取样点色块 */}
-                <circle
-                  className={`anno-pick-chip ${statusCls}${flashCls}${focusCls}`}
-                  cx={pct(R.x)}
-                  cy={pct(R.y)}
-                  r={7}
-                  pointerEvents="none"
-                  stroke="#ffffff"
-                  strokeWidth={1.5}
-                  style={{ fill: hexValue || issue.color || (targetImage === 'design' ? '#3b82f6' : '#ef4444') }}
-                />
+                {/* 取样点色块：先画色块再画序号（序号内嵌色块中心不被遮挡）；产品标注模式徽章胶囊随位数加宽 */}
+                {withPoint ? (
+                  <rect
+                    className={`anno-pick-chip ${statusCls}${flashCls}${focusCls}`}
+                    x={R.x * canvasSize.w - numBadgeW(num) / 2}
+                    y={R.y * canvasSize.h - 9}
+                    width={numBadgeW(num)}
+                    height={18}
+                    rx={9}
+                    pointerEvents="none"
+                    stroke={inkFor(chipFill)}
+                    strokeWidth={1.5}
+                    style={{ fill: chipFill }}
+                  />
+                ) : (
+                  <circle
+                    className={`anno-pick-chip ${statusCls}${flashCls}${focusCls}`}
+                    cx={pct(R.x)}
+                    cy={pct(R.y)}
+                    r={7}
+                    pointerEvents="none"
+                    stroke={inkFor(chipFill)}
+                    strokeWidth={1.5}
+                    style={{ fill: chipFill }}
+                  />
+                )}
+                {/* 序号：走查模式放点位旁侧；产品标注模式内嵌色块圆点中心 */}
+                {withPoint ? (
+                  <text
+                    className={`anno-num point-num ${statusCls}`}
+                    x={pct(R.x)}
+                    y={pct(R.y)}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    pointerEvents="none"
+                    style={{ fill: inkFor(chipFill) }}
+                  >
+                    {num}
+                  </text>
+                ) : (
+                  <text
+                    className={`anno-num ${sevCls}`}
+                    x={pct(R.x)}
+                    y={pct(R.y)}
+                    dx={flip ? 11 : -11}
+                    textAnchor={flip ? 'start' : 'end'}
+                    dominantBaseline="central"
+                    pointerEvents="none"
+                  >
+                    {num}
+                  </text>
+                )}
                 {/* 颜色文字标签：可点击打开详情 */}
                 <text
                   className={`anno-pick-label ${statusCls}${flashCls}${focusCls}`}
                   x={pct(R.x)}
                   y={pct(R.y)}
-                  dx={flip ? -11 : 11}
+                  dx={(withPoint ? 13 : 11) * (flip ? -1 : 1)}
                   dy={0}
                   textAnchor={flip ? 'end' : 'start'}
                   dominantBaseline="central"
@@ -733,7 +1031,7 @@ export default function AnnotationCanvas({
           return (
             <g key={issue.id}>
               <rect
-                className={`anno-box ${sevCls} ${issue.isAISuggested && !issue.aiConfirmed ? 'ai-candidate' : ''} ${statusCls}${flashCls}${focusCls}`}
+                className={`anno-box ${sevCls} ${issue.isAISuggested && !issue.aiConfirmed ? 'ai-candidate' : ''} ${ghostCls}${statusCls}${flashCls}${focusCls}`}
                 x={pct(R.x)}
                 y={pct(R.y)}
                 width={pct(R.width)}
@@ -824,7 +1122,23 @@ export default function AnnotationCanvas({
           </>
         )}
       </svg>
-      {loupeActive && loupe && <PixelLoupe dataUrl={dataUrl} clientX={loupe.cx} clientY={loupe.cy} rect={loupe.rect} />}
+      {loupeActive && loupe && (
+        <PixelLoupe dataUrl={dataUrl} clientX={loupe.cx} clientY={loupe.cy} px={loupe.px} py={loupe.py} rect={loupe.rect} />
+      )}
+      {/* 吸色同步取样镜像放大镜：对侧画布悬停时按同一归一化位置在本图取样显示（设计稿/截图尺寸不同各自换算） */}
+      {loupeActive &&
+        !loupe &&
+        mirrorLoupe &&
+        (() => {
+          const rect = svgRef.current?.getBoundingClientRect()
+          const img = imgRef.current
+          if (!rect?.width || !rect?.height || !img?.naturalWidth || !img.naturalHeight) return null
+          const cx = rect.left + mirrorLoupe.nx * rect.width
+          const cy = rect.top + mirrorLoupe.ny * rect.height
+          const px = Math.min(img.naturalWidth - 1, Math.floor(mirrorLoupe.nx * img.naturalWidth))
+          const py = Math.min(img.naturalHeight - 1, Math.floor(mirrorLoupe.ny * img.naturalHeight))
+          return <PixelLoupe dataUrl={dataUrl} clientX={cx} clientY={cy} px={px} py={py} rect={rect} />
+        })()}
     </div>
   )
 }

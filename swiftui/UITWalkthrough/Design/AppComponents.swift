@@ -128,7 +128,7 @@ struct AppButtonStyleWrapper: ButtonStyle {
             if config.isPressed { return Color.fill }
             return isHovering ? Color.buttonSecondaryHover : Color.cardBg
         case .danger:
-            return config.isPressed ? Color.dangerBg : Color.cardBg
+            return config.isPressed ? Color.dangerHover : Color.cardBg
         case .text:
             return Color.clear
         case .destructive:
@@ -328,7 +328,7 @@ struct AppBadge: View {
             .font(.system(size: FontTokens.Size.captionSmall, weight: .medium))
             .foregroundStyle(color)
             .padding(.horizontal, Spacing.mg)
-            .padding(.vertical, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
             .background(bgColor, in: Capsule())
     }
 }

@@ -23,6 +23,7 @@ export default {
   locate: '定位',
   loading: '加载中...',
   empty: '暂无问题',
+  cat_prototype: '原型说明',
   cat_spacing: '间距规范',
   cat_typography: '文字排版',
   cat_color: '颜色规范',

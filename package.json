@@ -1,7 +1,7 @@
 {
   "name": "ui-walkthrough",
   "productName": "AI 走查工具",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "UI 设计走查工具：设计稿与开发截图对比、标注、复验与报告导出",
   "author": "quweijia",
   "main": "./out/main/index.js",

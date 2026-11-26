@@ -34,6 +34,10 @@ export default {
   'page.issueSummary': '{{total}} in total, {{pending}} to fix',
   'page.interactiveNote':
     "The report is interactive: developers can click annotations on the images to view issue details and respond with 'Fixed / Can't fix (reason)'. Once all issues are answered, the Dev Fix Report can be exported from within the report in one click.",
+  // Optional (P3) issues export toggle: excluded by default; only checked items are included when enabled
+  'page.includeOptional': 'Export optional reference issues ({{checked}} / {{total}} checked)',
+  'page.includeOptionalTip':
+    'Optional reference issues (P3, e.g. a11y contrast or component-existence items prone to false positives) are excluded from reports by default. When enabled, only the ones you checked in the list are included, for both HTML reports and online docs.',
   'page.exporting': 'Exporting...',
   'page.exportHtmlBtn': 'Export HTML Report',
   'page.creating': 'Creating...',
@@ -49,10 +53,9 @@ export default {
   'page.viewReportTip': 'Click to view the report',
   'page.totalIssues': '{{n}} issues in total',
   'page.deleteRecordTip': 'Delete record',
-  'page.openFolderTip': 'Show in folder',
-  'page.confirmDeleteRecord': 'Delete this export record? The local report file will also be moved to the Trash.',
+  'page.confirmDeleteRecord': 'Delete this export record? It will be moved to the Trash and can be restored during the retention period.',
   'page.confirmAccept':
-    'Mark page "{{name}}" as accepted?\nThe page status in the analysis report list will be shown as Completed.',
+    'Mark page "{{name}}" as accepted?\nThe page status in the analysis report list will be shown as Completed, and the annotations on this page will be set to Fixed.',
   'page.confirmRevokeAccept':
     'Revoke the acceptance of page "{{name}}"?\nThe page status in the analysis report list will revert to In Progress.',
   'page.unreviewedTitle': 'Unreviewed AI candidate annotations',
@@ -131,6 +134,7 @@ export default {
   'exportedHtml.detailColor': 'Sampled Colors',
   'exportedHtml.detailSize': 'Annotation Size',
   'exportedHtml.detailSkill': 'Matched Skills',
+  'exportedHtml.detailAttachments': 'Attachments',
   'exportedHtml.blockPlaceholder':
     "Reason is required, e.g. API not supported yet, planned for a later release",
   'exportedHtml.submit': 'Submit',

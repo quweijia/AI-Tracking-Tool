@@ -18,6 +18,7 @@ import {
 import USelect from '../components/USelect'
 import SourceBadge from '../components/SourceBadge'
 import ReverifyModal from '../components/ReverifyModal'
+import { Spinner } from '../components/Spinner'
 
 export default function IssueList() {
   const { t } = useTranslation('issueList')
@@ -85,7 +86,7 @@ export default function IssueList() {
     <div className="page">
       <div className="page-header">
         <div>
-          <Link to={`/project/${projectId}/page/${pageId}`} className="back-link">
+          <Link to={`/project/${projectId}/page/${pageId}`} className="back-link" draggable={false}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M15 18l-6-6 6-6" />
             </svg>
@@ -153,7 +154,7 @@ export default function IssueList() {
                 <td>{idx + 1}</td>
                 <td>{catLabel(issue.category)}</td>
                 <td>
-                  <span className={`severity-badge severity-${issue.severity}`}>
+                  <span className={`badge ${issue.severity === 'major' ? 'badge-danger' : issue.severity === 'minor' ? 'badge-warning' : 'badge-neutral'}`}>
                     {sevLabel(issue.severity)}
                   </span>
                 </td>
@@ -180,9 +181,9 @@ export default function IssueList() {
                   />
                 </td>
                 <td>
-                  {issue.fixStatus === 'passed' && <span className="fix-badge pass">{t('passed')}</span>}
+                  {issue.fixStatus === 'passed' && <span className="badge badge-success fix-badge">{t('passed')}</span>}
                   {issue.fixStatus === 'failed' && (
-                    <span className="fix-badge fail">
+                    <span className="badge badge-danger fix-badge">
                       {t('failed')}
                       {(issue.reverifyCount ?? 0) > 1 ? ` ×${issue.reverifyCount}` : ''}
                     </span>
@@ -203,7 +204,7 @@ export default function IssueList() {
             {sorted.length === 0 && (
               <tr>
                 <td colSpan={8} className="table-empty">
-                  {issues === undefined ? t('loading') : t('empty')}
+                  {issues === undefined ? <Spinner label={t('loading')} /> : t('empty')}
                 </td>
               </tr>
             )}

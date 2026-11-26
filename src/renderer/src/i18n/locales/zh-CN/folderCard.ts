@@ -3,5 +3,6 @@ export default {
   updatedAt: '更新于 {{time}}',
   createdAt: '创建于 {{time}}',
   renameTitle: '重命名',
+  editTitle: '编辑文件夹',
   deleteTitle: '删除文件夹',
 }

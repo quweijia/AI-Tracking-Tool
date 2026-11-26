@@ -20,23 +20,32 @@ asarUnpack:
   - resources/**
 mac:
   icon: build/icon.icns
-  # 未申请开发者证书，跳过签名（首次打开需右键 → 打开）
+  # —— 签名与公证 ——
+  # 当前未申请 Developer ID Application 证书，跳过签名（首次打开需右键 → 打开）
+  # 证书导入钥匙串后，按以下 3 步启用签名+公证：
+  #   1) 删除下方 identity: null
+  #   2) 取消注释 hardenedRuntime ~ notarize 配置块
+  #   3) 复制 .env.example 为 .env，填入 APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
   identity: null
+  # hardenedRuntime: true
+  # gatekeeperAssess: false
+  # entitlements: build/entitlements.mac.plist
+  # entitlementsInherit: build/entitlements.mac.plist
+  # notarize: true
   category: public.app-category.developer-tools
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  # ASCII 产物名（中文文件名在 GitHub Release 等渠道会被清洗）
+  artifactName: AI-Walkthrough-${version}-${arch}.${ext}
   target:
+    # 双架构 dmg（x64 Intel / arm64 Apple Silicon）；不产出 zip
     - target: dmg
-      arch:
-        - x64
-        - arm64
-    - target: zip
       arch:
         - x64
         - arm64
 win:
   icon: build/icon.png
   # 未签名，Windows 安装/运行时可能弹出 SmartScreen 提示（选择「仍要运行」即可）
-  artifactName: AI-Walkthrough-Setup-${version}.${ext}
+  # 无独立 .ico，electron-builder 自动从 1024px png 转换
+  artifactName: AI-Walkthrough-${version}-x64-setup.${ext}
   target:
     - target: nsis
       arch:
@@ -46,3 +55,11 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   deleteAppDataOnUninstall: false
+  # 简体中文安装向导（2052 = zh-CN LCID）
+  language: '2052'
+  installerLanguages:
+    - zh_CN
+  # 桌面 / 开始菜单快捷方式，快捷方式名用 productName（AI 走查工具）
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ${productName}

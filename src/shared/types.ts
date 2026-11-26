@@ -49,6 +49,8 @@ export interface StyleNode {
   hugWidth?: boolean
   /** DOM 侧直接文本子节点 Range 实测渲染宽度（多行取最宽行），hug 文本宽度比对用 */
   textContentWidth?: number
+  /** DOM 侧直接文本子节点 Range 实测渲染包围盒（多行并集，文档坐标），a11y 文本类标注定位用 */
+  textRect?: { x: number; y: number; width: number; height: number }
   borderWidth?: number
   borderColor?: string
   boxShadow?: string
@@ -172,6 +174,10 @@ export interface WalkCheckOptions {
   style: 'concise' | 'detailed'
   /** 按需叠加无障碍 a11y 检查（默认关闭） */
   a11y: boolean
+  /** 组件存在性识别校验（默认关闭）：开启后才输出「组件缺失」类备选问题（该类识别易误判，仅作参考） */
+  componentCheck: boolean
+  /** 设计 Token 合规校验（默认开启）：走查时将页面 DOM 样式与项目绑定规范 Token 比对（设置页关闭设计规范功能后开关隐藏） */
+  specCheck: boolean
 }
 
 /** 检查维度（AI 视觉比对 prompt 注入用，label 与面板勾选项一致；与 6 项视觉检查清单对齐） */
@@ -197,7 +203,9 @@ export const DEFAULT_WALK_CHECK_OPTIONS: WalkCheckOptions = {
   depth: 'standard',
   analysis: WALK_ANALYSES.map((a) => a.key),
   style: 'detailed',
-  a11y: false
+  a11y: false,
+  componentCheck: false,
+  specCheck: true
 }
 
 /** 校正本地存储的检查项：过滤已下线的维度 key，补齐缺省字段 */
@@ -215,8 +223,135 @@ export function normalizeWalkCheckOptions(raw: Partial<WalkCheckOptions> | undef
     depth,
     analysis: analyses.length ? analyses : DEFAULT_WALK_CHECK_OPTIONS.analysis,
     style,
-    a11y: raw?.a11y === true
+    a11y: raw?.a11y === true,
+    componentCheck: raw?.componentCheck === true,
+    // 历史数据无该字段：undefined 视为开启（与存量「绑定规范即校验」行为一致，仅显式关闭才跳过）
+    specCheck: raw?.specCheck !== false
   }
+}
+
+/** 问题分级（自动走查）：required=必标问题（默认生成画布标注并进报告）；optional=备选参考问题（默认不生成标注，用户勾选后才标注、随导出开关进报告）。缺省视为 required（兼容历史数据） */
+export type IssueLevel = 'required' | 'optional'
+
+/** 缺失类关键词：组件缺失类识别易误判，兜底归入备选 */
+export const ISSUE_MISSING_KEYWORDS = ['缺失', '缺少', '未找到', '不存在']
+/** 无障碍/对比度类关键词：设计选型占多数，兜底归入备选（匹配时统一转小写） */
+export const ISSUE_A11Y_KEYWORDS = ['对比度', 'wcag', '无障碍', 'contrast']
+
+/** AI 判为备选但未给出理由时的默认说明 */
+export const DEFAULT_OPTIONAL_REASON = 'AI 判定为参考类问题，默认不生成画布标注，勾选后加入标注清单'
+/** 缺失类兜底理由（AI 兜底与程序轨 element-missing 共用，保证分级口径一致） */
+export const MISSING_OPTIONAL_REASON =
+  '组件缺失类识别易误判：请核对 Figma 设计稿确认该元素是否真实存在，先作为备选参考'
+/** 无障碍/对比度类兜底理由（AI 兜底与程序轨 a11y 共用） */
+export const A11Y_OPTIONAL_REASON =
+  '无障碍/对比度类提示：设计稿与开发图视觉一致时属设计选型，仅作评审参考，不作为强制缺陷'
+
+/** AI 显式返回的 level 白名单归一化：非法/缺省返回 undefined（走兜底判定） */
+export function normalizeIssueLevel(raw: unknown): IssueLevel | undefined {
+  return raw === 'required' || raw === 'optional' ? raw : undefined
+}
+
+/**
+ * 问题分级兜底判定（仅自动走查套用，手动 AI 识别不分级）：
+ * ① AI 显式 level 优先（模型已按 prompt 要求先核对设计稿再判定）；
+ * ② category=missing-component 或描述命中缺失类关键词 → optional（组件缺失识别易误判，需人工核对设计稿）；
+ * ③ 描述命中对比度/无障碍关键词 → optional（设计稿与开发图视觉一致时属设计选型，仅参考）；
+ * ④ 其余 → required（走正常标注流程）
+ */
+export function resolveIssueLevel(input: {
+  level?: unknown
+  levelReason?: unknown
+  category?: unknown
+  description?: unknown
+}): { level: IssueLevel; levelReason?: string } {
+  const desc = typeof input.description === 'string' ? input.description : ''
+  const reason = typeof input.levelReason === 'string' ? input.levelReason.trim() : ''
+  const explicit = normalizeIssueLevel(input.level)
+  if (explicit) {
+    return {
+      level: explicit,
+      levelReason: reason || (explicit === 'optional' ? DEFAULT_OPTIONAL_REASON : undefined)
+    }
+  }
+  const isMissing =
+    String(input.category) === 'missing-component' || ISSUE_MISSING_KEYWORDS.some((k) => desc.includes(k))
+  if (isMissing) {
+    return { level: 'optional', levelReason: reason || MISSING_OPTIONAL_REASON }
+  }
+  const lower = desc.toLowerCase()
+  if (ISSUE_A11Y_KEYWORDS.some((k) => lower.includes(k))) {
+    return { level: 'optional', levelReason: reason || A11Y_OPTIONAL_REASON }
+  }
+  return { level: 'required' }
+}
+
+/**
+ * 走查 visual 轨分级兜底：AI 显式 level 优先保留（含理由）；无显式分级时按缺失/对比度关键词兜底。
+ * 仅备选级与 AI 显式分级落库，纯 required 不写字段（缺省视为 required，兼容历史数据）。
+ * 仅自动走查调用，手动 AI 识别不分级。
+ */
+export function applyWalkIssueLevels<T extends { level?: unknown; levelReason?: unknown }>(issues: T[]): T[] {
+  return issues.map((it) => {
+    const r = resolveIssueLevel(it)
+    if (r.level === 'optional' || it.level != null) {
+      return { ...it, level: r.level, levelReason: r.levelReason } as T
+    }
+    return it
+  })
+}
+
+/**
+ * 画布几何谓词：带坐标信息的标注才有可画几何（清单手加的问题无坐标不渲染）。
+ * 不判断备选勾选状态——自动走查画布对未勾选备选也渲染（虚线幽灵样式），是否放行由调用侧决定。
+ */
+export function isDrawableOnCanvas(i: {
+  shape?: string
+  width?: number
+  height?: number
+}): boolean {
+  return (
+    i.shape === 'point' ||
+    i.shape === 'text' ||
+    i.shape === 'measure' ||
+    i.shape === 'picker' ||
+    i.width !== 0 ||
+    i.height !== 0
+  )
+}
+
+/**
+ * 画布渲染谓词：带坐标信息的标注才渲染（清单手加的问题无坐标不渲染）；
+ * 备选（optional）问题未勾选时不渲染，用户勾选后生成画布标注；required 与历史数据（无 level）不受影响。
+ */
+export function isRenderableOnCanvas(i: {
+  shape?: string
+  width?: number
+  height?: number
+  level?: unknown
+  optionalChecked?: unknown
+}): boolean {
+  if (i.level === 'optional' && i.optionalChecked !== true) return false
+  return isDrawableOnCanvas(i)
+}
+
+/**
+ * 报告收录谓词：未审核 AI 候选不计入报告；备选（optional）问题默认不导出，
+ * 开启「导出备选参考问题」后仅收录清单中已勾选的备选项；required 与历史数据（无 level）不受影响。
+ * HTML 报告与在线文档（飞书 / 腾讯 / 金山）共用此口径。
+ */
+export function isReportableIssue(
+  i: {
+    isAISuggested?: unknown
+    aiConfirmed?: unknown
+    level?: unknown
+    optionalChecked?: unknown
+  },
+  includeOptional: boolean
+): boolean {
+  if (i.isAISuggested && !i.aiConfirmed) return false
+  if (i.level === 'optional' && (!includeOptional || i.optionalChecked !== true)) return false
+  return true
 }
 
 /** 自动走查比对结果（IPC 返回） */
@@ -506,4 +641,49 @@ export interface SpecSyncResult {
   degraded?: SpecDegradation[]
   /** 变量级 403（PAT 无 file_variables:read，Enterprise 专属）：已中断不降级，待用户选择是否改同步样式 */
   variableDenied?: boolean
+}
+
+// ===== 自动走查会话 profile（登录态快照，按域名加密落盘） =====
+
+/** Cookie 快照行（序列化自 Electron CookiesGetDetails，仅保留注入所需字段） */
+export interface WalkSessionCookie {
+  name: string
+  value: string
+  /** Cookie 归属域（带前导点表示子域共享），缺省为快照域名 */
+  domain?: string
+  path?: string
+  secure?: boolean
+  httpOnly?: boolean
+  /** 过期时间（Unix 秒）；会话 Cookie 缺省 */
+  expirationDate?: number
+  /** lax / strict / no_restriction / unspecified */
+  sameSite?: string
+}
+
+/** indexedDB 对象仓库快照（best-effort，Blob/File 等不可序列化内容会跳过） */
+export interface WalkSessionIdbStore {
+  name: string
+  /** 主键 keyPath（null = 行外主键，恢复时显式传 key） */
+  keyPath: string | string[] | null
+  autoIncrement: boolean
+  indexes: { name: string; keyPath: string | string[]; unique: boolean }[]
+  records: { key?: unknown; value: unknown }[]
+}
+
+/** 自动走查会话 profile：登录窗口命中「登录成功标识」后抓取的 webview 上下文 */
+export interface WalkSessionProfile {
+  /** 站点 origin（存储恢复的作用域） */
+  origin: string
+  /** 抓取时的目标 URL */
+  targetUrl: string
+  /** 域名（host[:port]） */
+  domain: string
+  /** 本域名使用的「登录成功标识」（下次登录窗口预填） */
+  marker?: string
+  cookies: WalkSessionCookie[]
+  localStorage: Record<string, string>
+  sessionStorage: Record<string, string>
+  indexedDB: { name: string; version?: number; stores: WalkSessionIdbStore[] }[]
+  /** 抓取时间（ms） */
+  createdAt: number
 }

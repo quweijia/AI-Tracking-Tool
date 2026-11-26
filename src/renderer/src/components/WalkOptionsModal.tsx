@@ -73,7 +73,7 @@ function CheckChips({
           <button
             key={o.key}
             type="button"
-            className={`walk-opt-chip ${active ? 'active' : ''}`}
+            className={`chip chip-lg walk-opt-chip ${active ? 'active' : ''}`}
             onClick={() => onChange(active ? value.filter((k) => k !== o.key) : [...value, o.key])}
           >
             {active ? '✓ ' : ''}
@@ -125,7 +125,7 @@ function OptSection({ title, children }: { title: string; children: React.ReactN
 }
 
 /**
- * 自定义检查项弹窗：检查维度 / 检查深度 / AI 分析设置 / 输出风格 / 无障碍 a11y 开关。
+ * 自定义检查项弹窗：检查维度 / 检查深度 / AI 分析设置 / 输出风格 / 问题过滤设置（无障碍与组件存在性两类易误判校验开关）。
  * 检查深度注入 AI 视觉比对 prompt（结构化容差倍率仅高级调试时生效）。
  */
 export function WalkCheckOptionsModal({
@@ -154,6 +154,23 @@ export function WalkCheckOptionsModal({
   const [analysis, setAnalysis] = useState<string[]>(initial.analysis)
   const [style, setStyle] = useState<WalkCheckOptions['style']>(initial.style)
   const [a11y, setA11y] = useState<boolean>(initial.a11y)
+  /** 组件存在性开关（默认关闭）：开启后输出「组件缺失」类发现并归入「备选参考」（P3） */
+  const [componentCheck, setComponentCheck] = useState<boolean>(initial.componentCheck)
+  /** 设计 Token 合规校验开关（默认开启）：走查时按项目绑定规范 Token 校验页面 DOM 样式 */
+  const [specCheck, setSpecCheck] = useState<boolean>(initial.specCheck)
+  /** 设计规范功能开关（设置页「通用」控制，默认开启）：关闭时隐藏 Token 校验开关区块并同步置 false
+   *  （弹窗临时挂载，打开时读取一次即可），避免「开关已隐藏但存储值仍为 true」的隐性不一致 */
+  const [specMenuOn, setSpecMenuOn] = useState<boolean>(true)
+  useEffect(() => {
+    void window.electronAPI
+      .getConfig()
+      .then((cfg) => {
+        const on = cfg.specMenuEnabled !== false
+        setSpecMenuOn(on)
+        if (!on) setSpecCheck(false)
+      })
+      .catch(() => undefined)
+  }, [])
   /** 技能多选（批量提交：勾选只改本地，保存时随检查项一并生效） */
   const [picked, setPicked] = useState<string[]>(skillIds)
 
@@ -204,7 +221,7 @@ export function WalkCheckOptionsModal({
             className="btn-primary"
             disabled={dimensions.length === 0 || analysis.length === 0}
             onClick={() => {
-              onSave({ dimensions, depth, analysis, style, a11y })
+              onSave({ dimensions, depth, analysis, style, a11y, componentCheck, specCheck })
               onSkillChange(picked)
             }}
           >
@@ -275,17 +292,44 @@ export function WalkCheckOptionsModal({
         />
       </OptSection>
 
-      <OptSection title={t('secA11y')}>
+      {/* 设计 Token 合规校验：受设置页「设计规范功能」开关控制，功能关闭时整块隐藏（已保存的开关状态保留） */}
+      {specMenuOn && (
+        <OptSection title={t('filterSpecToggle')}>
+          <div className="walk-opt-switch-row">
+            <span>{t('filterSpecToggle')}</span>
+            <button
+              type="button"
+              className={`switch ${specCheck ? 'on' : ''}`}
+              title={specCheck ? t('filterSpecOff') : t('filterSpecOn')}
+              onClick={() => setSpecCheck(!specCheck)}
+            />
+          </div>
+          <p className="settings-desc walk-opt-hint">{t('filterSpecHint')}</p>
+        </OptSection>
+      )}
+
+      {/* 问题过滤设置：两类易误判校验开关（均默认关闭），产出的问题归入「备选参考」默认不生成画布标注 */}
+      <OptSection title={t('secIssueFilter')}>
         <div className="walk-opt-switch-row">
-          <span>{t('a11yToggle')}</span>
+          <span>{t('filterA11yToggle')}</span>
           <button
             type="button"
             className={`switch ${a11y ? 'on' : ''}`}
-            title={a11y ? t('a11yOff') : t('a11yOn')}
+            title={a11y ? t('filterA11yOff') : t('filterA11yOn')}
             onClick={() => setA11y(!a11y)}
           />
         </div>
-        <p className="settings-desc walk-opt-hint">{t('secA11yHint')}</p>
+        <p className="settings-desc walk-opt-hint">{t('filterA11yHint')}</p>
+        <div className="walk-opt-switch-row">
+          <span>{t('filterCompToggle')}</span>
+          <button
+            type="button"
+            className={`switch ${componentCheck ? 'on' : ''}`}
+            title={componentCheck ? t('filterCompOff') : t('filterCompOn')}
+            onClick={() => setComponentCheck(!componentCheck)}
+          />
+        </div>
+        <p className="settings-desc walk-opt-hint">{t('filterCompHint')}</p>
       </OptSection>
     </ModalShell>
   )

@@ -10,10 +10,17 @@ import { playTaskDoneSound } from '../utils/sound'
  */
 export type AiTaskStatus = 'running' | 'done' | 'failed' | 'interrupted'
 
+/** 任务来源模式：手动标注页 / 自动走查页（点击后台入口跳转时需回到对应模式） */
+export type AiTaskMode = 'manual' | 'auto'
+
 export interface AiTask {
   id: string
   pageId: string
+  /** 所属项目：全局悬浮提示点击后可跳回任务所在页面 */
+  projectId: string
   pageName: string
+  /** 发起任务时所在的工作模式 */
+  mode: AiTaskMode
   status: AiTaskStatus
   message: string
   startedAt: number
@@ -22,7 +29,7 @@ export interface AiTask {
 interface AiTasksState {
   tasks: AiTask[]
   /** 新建任务，返回任务 id */
-  start: (pageId: string, pageName: string) => string
+  start: (pageId: string, projectId: string, pageName: string, mode: AiTaskMode) => string
   /** 用户选择「中断任务」：正在等待的识别结果将被丢弃 */
   interrupt: (taskId: string) => void
   /** 更新某页面所有进行中任务的进度提示（流式接收字数/耗时） */
@@ -37,12 +44,12 @@ const genTaskId = (): string => `${Date.now()}-${Math.random().toString(36).slic
 
 export const useAiTasksStore = create<AiTasksState>((set, get) => ({
   tasks: [],
-  start: (pageId, pageName) => {
+  start: (pageId, projectId, pageName, mode) => {
     const id = genTaskId()
     set((s) => ({
       tasks: [
         ...s.tasks,
-        { id, pageId, pageName, status: 'running', message: tr('running', 'aiTasks'), startedAt: Date.now() }
+        { id, pageId, projectId, pageName, mode, status: 'running', message: tr('running', 'aiTasks'), startedAt: Date.now() }
       ]
     }))
     return id

@@ -191,7 +191,7 @@ struct ReportsHomeView: View {
                 .foregroundStyle(.white)
                 .frame(width: 26, height: 26)
                 .background(tint.opacity(0.45), in: Circle())
-            VStack(alignment: .leading, spacing: Spacing.xs) {
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
                 Text(title)
                     .font(.system(size: FontTokens.Size.captionSmall, weight: .semibold))
                     .foregroundStyle(.white)
@@ -292,7 +292,7 @@ struct ReportsHomeView: View {
         return row(
             name: HStack(spacing: Spacing.mg) {
                 thumb(g.pageName, large: false)
-                VStack(alignment: .leading, spacing: Spacing.xs) {
+                VStack(alignment: .leading, spacing: Spacing.xxs) {
                     HStack(spacing: Spacing.sm) {
                         Text(g.pageName)
                             .font(.system(size: FontTokens.Size.bodySmall, weight: .semibold))
@@ -347,7 +347,7 @@ struct ReportsHomeView: View {
 
     /// 「项目 / 页面」单元格：项目名 + 可点击的页面名（跳转工作台）
     private func pathCell(projectId: String, pageId: String, pageName: String) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.xs) {
+        VStack(alignment: .leading, spacing: Spacing.xxs) {
             Text(projectName(projectId))
                 .font(.system(size: FontTokens.Size.bodySmall))
                 .lineLimit(1)
@@ -420,7 +420,7 @@ struct ReportsHomeView: View {
         return VStack(alignment: .leading, spacing: Spacing.lg) {
             HStack(spacing: Spacing.mg) {
                 thumb(g.pageName, large: true)
-                VStack(alignment: .leading, spacing: Spacing.xs) {
+                VStack(alignment: .leading, spacing: Spacing.xxs) {
                     Text(g.pageName)
                         .font(.system(size: FontTokens.Size.body, weight: .semibold))
                         .lineLimit(1)
@@ -434,7 +434,7 @@ struct ReportsHomeView: View {
                 statusBadge(accepted)
             }
             HStack(spacing: Spacing.lg) {
-                HStack(spacing: Spacing.xs) {
+                HStack(spacing: Spacing.xxs) {
                     Text("\(g.latest.record.total)")
                         .font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold))
                     Text("个问题")
@@ -504,7 +504,7 @@ struct ReportsHomeView: View {
                     .font(.system(size: FontTokens.Size.captionSmall))
                     .foregroundStyle(Color.textSecondary)
                 Spacer()
-                HStack(spacing: Spacing.xs) {
+                HStack(spacing: Spacing.xxs) {
                     Button {
                         page = safePage - 1
                     } label: {
@@ -518,7 +518,7 @@ struct ReportsHomeView: View {
                             Text("\(n)")
                                 .font(.system(size: FontTokens.Size.captionSmall))
                                 .padding(.horizontal, Spacing.mg)
-                                .padding(.vertical, Spacing.xs)
+                                .padding(.vertical, Spacing.xxs)
                                 .background(
                                     n == safePage  ? Color.primarySoft : Color.clear,
                                     in: Capsule()
@@ -591,7 +591,7 @@ struct ReportsHomeView: View {
             .font(.system(size: FontTokens.Size.caption))
             .fontWeight(.semibold)
             .padding(.horizontal, Spacing.mg)
-            .padding(.vertical, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
             .background(
                 ver == 1  ? Color.success.opacity(0.15) : .primary.opacity(0.07),
                 in: Capsule()
@@ -604,7 +604,7 @@ struct ReportsHomeView: View {
         Text(accepted ? "已完成" : "进行中")
             .font(.system(size: FontTokens.Size.caption))
             .padding(.horizontal, Spacing.mg)
-            .padding(.vertical, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
             .background(
                 (accepted  ? Color.success : .warning).opacity(0.15),
                 in: Capsule()

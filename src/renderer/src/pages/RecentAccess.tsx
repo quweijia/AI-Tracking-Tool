@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { db, Visit, Project } from '../db'
+import { db, Visit, Project, WalkthroughPage, Platform } from '../db'
+import { productDb, ProductAnnotationSet, ProductPage as ProductPageRow, bySort } from '../db/product'
+import { useProductModeStore } from '../stores/productMode'
 import { tr } from '../i18n'
+import { useSettingsStore } from '../stores/settings'
 import { PlatformBadge } from '../components/PlatformBadge'
+import { confirmDialog } from '../components/ConfirmDialog'
 import { ProjectLogo, timeAgo } from '../components/ProjectCard'
 import heroBannerArtUrl from '../assets/hero-banner-art.png'
 import heroBannerArtDarkUrl from '../assets/hero-banner-art-dark.png'
@@ -104,6 +108,26 @@ const fmtVisitTime = (ts: number) => {
 
 type ListTab = 'all' | 'project' | 'page'
 
+/** 统一访问条目：walk=页面 / product=标注集（产品模式的「页面」等价概念），供表格、活动时间线、项目聚合共用 */
+interface RecentItem {
+  id: string
+  projectId: string
+  name: string
+  folderId?: string
+  /** 最近活跃时间（walk=页面 updatedAt / product=标注集 updatedAt，与访问时间取较大值排序） */
+  updatedAt: number
+  /** 产品标注集缩略图（集内首页缩略，直接可用；walk 页面缩略图走 designImagePath 异步读取） */
+  thumb?: string
+  /** 产品标注集页面数 */
+  pageCount?: number
+  /** walk 页面平台（产品模式无平台概念） */
+  platform?: Platform
+  /** walk 页面外部链接（figma/dev 地址，用于路径描述行） */
+  url?: string
+  /** walk 页面是否配置了 Figma 地址（用于描述文案） */
+  hasFigma?: boolean
+}
+
 /** 表格时间分组（今天 / 最近 7 天 / 最近 1 个月 / 更早），组可折叠 */
 type TimeBucket = 'today' | 'week' | 'month' | 'earlier'
 const GROUP_BUCKETS: { key: TimeBucket; labelKey: string }[] = [
@@ -163,39 +187,118 @@ const QUICK_TOOLS: { key: string; nameKey: string; subKey: string; icon: JSX.Ele
 
 export default function RecentAccess() {
   const { t } = useTranslation('recentAccess')
-  const visits = useLiveQuery(() => db.visits.toArray(), []) ?? []
-  const pages = useLiveQuery(() => db.pages.toArray(), []) ?? []
-  const projects = useLiveQuery(() => db.projects.toArray(), []) ?? []
-  const folders = useLiveQuery(() => db.folders.toArray(), []) ?? []
+  const navigate = useNavigate()
+  const setTab = useSettingsStore((s) => s.setTab)
+  const productMode = useProductModeStore((s) => s.enabled)
+  /** 访问记录：walk=页面访问 / product=标注集访问（pageId 存标注集 ID），两侧结构一致 */
+  const visits = useLiveQuery(() => (productMode ? productDb.visits.toArray() : db.visits.toArray()), [productMode]) ?? []
+  const walkPages =
+    useLiveQuery(
+      () => (productMode ? Promise.resolve<WalkthroughPage[]>([]) : db.pages.toArray().then((rows) => rows.filter((p) => !p.deletedAt))),
+      [productMode]
+    ) ?? []
+  const sets =
+    useLiveQuery(
+      () =>
+        productMode
+          ? productDb.sets.toArray().then((rows) => rows.filter((s) => !s.deletedAt))
+          : Promise.resolve<ProductAnnotationSet[]>([]),
+      [productMode]
+    ) ?? []
+  const productPages =
+    useLiveQuery(
+      () =>
+        productMode
+          ? productDb.pages.toArray().then((rows) => rows.filter((p) => !p.deletedAt))
+          : Promise.resolve<ProductPageRow[]>([]),
+      [productMode]
+    ) ?? []
+  const projects =
+    useLiveQuery(
+      () =>
+        productMode
+          ? productDb.projects.toArray().then((rows) => rows.filter((p) => !p.deletedAt))
+          : db.projects.toArray().then((rows) => rows.filter((p) => !p.deletedAt)),
+      [productMode]
+    ) ?? []
+  const folders =
+    useLiveQuery(
+      () =>
+        productMode
+          ? productDb.folders.toArray().then((rows) => rows.filter((f) => !f.deletedAt))
+          : db.folders.toArray().then((rows) => rows.filter((f) => !f.deletedAt)),
+      [productMode]
+    ) ?? []
 
   const [listTab, setListTab] = useState<ListTab>('all')
   /** 表格时间分组折叠状态（默认全部展开） */
   const [collapsedGroups, setCollapsedGroups] = useState<Set<TimeBucket>>(new Set())
-  /** 继续上次工作的设计稿缩略图（page.designImagePath） */
+  /** 继续上次工作的设计稿缩略图（walk 页面 designImagePath 异步读取；产品模式直接用 thumb） */
   const [designThumb, setDesignThumb] = useState<string>('')
 
   const projectName = (id: string) => projects.find((p) => p.id === id)?.name ?? t('unknownProject')
   const folderName = (id: string | undefined) => folders.find((v) => v.id === id)?.name ?? ''
 
-  /** 项目 Logo：项目被删除时用页面名首字符占位（不影响展示） */
-  const projOf = (projectId: string, fallbackName: string, platform: Project['platform']): Project =>
-    projects.find((p) => p.id === projectId) ?? {
-      id: projectId,
-      name: fallbackName,
-      platform,
-      createdAt: 0,
-      updatedAt: 0
+  /** 常用工具跳转：报告 → 标注报告页；其余 → 设置页对应分区（先写入侧边栏分区再导航） */
+  const openTool = (key: string) => {
+    if (key === 'report') {
+      navigate('/reports')
+      return
     }
-
-  const pageMap = new Map(pages.map((p) => [p.id, p]))
+    if (key === 'detect') setTab('models')
+    else if (key === 'compare') setTab('skills')
+    else if (key === 'config') setTab('tolerance')
+    navigate('/settings')
+  }
 
   /**
-   * 排序口径 = 最近活跃时间：页面 updatedAt（标注/状态修改）与最近访问时间的较大值，
-   * 刚修改过的页面会实时排到最前。
+   * 统一访问条目视图：walk 由页面列表构建；product 由标注集列表构建（缩略图取集内首页缩略）。
+   * 表格 / 活动时间线 / 项目聚合 / 继续上次工作全部基于该视图，与访问记录的 pageId（walk 页面 ID / product 标注集 ID）对应。
+   */
+  const items = useMemo<RecentItem[]>(() => {
+    if (productMode) {
+      return [...sets]
+        .sort(bySort)
+        .map((s: ProductAnnotationSet) => {
+          const setPages = productPages.filter((p: ProductPageRow) => p.setId === s.id).sort(bySort)
+          return {
+            id: s.id,
+            projectId: s.projectId,
+            name: s.name,
+            folderId: s.folderId,
+            updatedAt: s.updatedAt,
+            thumb: setPages[0]?.thumbDataUrl,
+            pageCount: setPages.length
+          }
+        })
+    }
+    return walkPages.map((p) => ({
+      id: p.id,
+      projectId: p.projectId,
+      name: p.pageName,
+      folderId: p.folderId,
+      updatedAt: p.updatedAt ?? p.createdAt,
+      platform: p.platform,
+      url: p.devUrl || p.figmaUrl || '',
+      hasFigma: !!p.figmaUrl
+    }))
+  }, [productMode, sets, productPages, walkPages])
+  const itemMap = new Map(items.map((i) => [i.id, i]))
+
+  /** 项目 Logo 数据：项目被删除时用条目名占位（结构化类型，walk / product 项目通用） */
+  const projOf = (projectId: string, fallbackName: string): Pick<Project, 'id' | 'name' | 'logoPath' | 'logoColor'> => {
+    const found = projects.find((p) => p.id === projectId)
+    if (found) return found
+    return { id: projectId, name: fallbackName }
+  }
+
+  /**
+   * 排序口径 = 最近活跃时间：条目 updatedAt（标注/状态修改）与最近访问时间的较大值，
+   * 刚修改过的条目会实时排到最前。
    */
   const latestByPage = new Map<string, number>()
   visits.forEach((v: Visit) => {
-    if (!pageMap.has(v.pageId)) return
+    if (!itemMap.has(v.pageId)) return
     const cur = latestByPage.get(v.pageId) ?? 0
     if (v.visitedAt > cur) latestByPage.set(v.pageId, v.visitedAt)
   })
@@ -205,7 +308,7 @@ export default function RecentAccess() {
     return m
   }, [visits])
   const entries = [...latestByPage.entries()].map(([pageId, ts]) => {
-    const activity = Math.max(pageMap.get(pageId)?.updatedAt ?? 0, ts)
+    const activity = Math.max(itemMap.get(pageId)?.updatedAt ?? 0, ts)
     return [pageId, activity] as [string, number]
   })
   entries.sort((a, b) => b[1] - a[1])
@@ -268,11 +371,11 @@ export default function RecentAccess() {
   )
   const pct = (cur: number, prev: number) => (prev > 0 ? Math.round(((cur - prev) / prev) * 100) : 0)
 
-  /** 项目维度聚合（「项目」tab） */
+  /** 项目维度聚合（「项目」tab）：仅统计访问条目仍存在的记录 */
   const projectGroups = useMemo(() => {
     const m = new Map<string, { projectId: string; latest: number; pageCount: number; visitCount: number }>()
     visits.forEach((v) => {
-      if (!pages.some((p) => p.id === v.pageId)) return
+      if (!items.some((p) => p.id === v.pageId)) return
       const cur = m.get(v.projectId)
       if (cur) {
         cur.latest = Math.max(cur.latest, v.visitedAt)
@@ -285,25 +388,26 @@ export default function RecentAccess() {
       g.pageCount = new Set(visits.filter((v) => v.projectId === g.projectId).map((v) => v.pageId)).size
     })
     return [...m.values()].sort((a, b) => b.latest - a.latest)
-  }, [visits, pages])
+  }, [visits, items])
 
-  /** 继续上次工作：最近一次访问且页面仍存在 */
+  /** 继续上次工作：最近一次访问且条目仍存在（walk=页面 / product=标注集） */
   const lastEntry = entries[0]
-  const lastPage = lastEntry ? pageMap.get(lastEntry[0]) : undefined
-  const lastVisitCount = lastPage ? (visitCountByPage.get(lastPage.id) ?? 0) : 0
+  const lastItem = lastEntry ? itemMap.get(lastEntry[0]) : undefined
+  const lastVisitCount = lastItem ? (visitCountByPage.get(lastItem.id) ?? 0) : 0
 
-  /** 最近活动时间线：全部最近访问记录（页面仍存在的），超出部分卡片内滚动 */
+  /** 最近活动时间线：全部最近访问记录（条目仍存在的），超出部分卡片内滚动 */
   const activityItems = useMemo(
     () =>
       [...visits]
-        .filter((v) => pageMap.has(v.pageId))
+        .filter((v) => itemMap.has(v.pageId))
         .sort((a, b) => b.visitedAt - a.visitedAt),
-    [visits, pageMap]
+    [visits, itemMap]
   )
 
+  /** 继续上次工作缩略图：walk 页面异步读取 designImagePath；产品模式直接用标注集 thumb，无需读取 */
   useEffect(() => {
     let alive = true
-    const path = lastPage?.designImagePath
+    const path = productMode ? '' : walkPages.find((p) => p.id === lastItem?.id)?.designImagePath
     if (!path) {
       setDesignThumb('')
       return
@@ -314,22 +418,24 @@ export default function RecentAccess() {
     return () => {
       alive = false
     }
-  }, [lastPage?.designImagePath])
+  }, [productMode, lastItem?.id, walkPages])
 
   const handleClear = async () => {
     if (!visits.length) return
-    const ok = window.confirm(t('clearConfirm', { count: visits.length }))
+    const ok = await confirmDialog({ message: t('clearConfirm', { count: visits.length }), tone: 'danger' })
     if (!ok) return
-    await db.visits.clear()
+    await (productMode ? productDb.visits.clear() : db.visits.clear())
   }
 
-  /** 删除单个页面的全部访问记录（仅清足迹，不影响页面与标注数据） */
+  /** 删除单个条目的全部访问记录（仅清足迹，不影响页面/标注集与标注数据） */
   const handleDeleteVisits = async (pageId: string, pageName: string) => {
     const count = visits.filter((v) => v.pageId === pageId).length
     if (!count) return
-    const ok = window.confirm(t('deleteVisitConfirm', { name: pageName, count }))
+    const ok = await confirmDialog({ message: t('deleteVisitConfirm', { name: pageName, count }), tone: 'danger' })
     if (!ok) return
-    await db.visits.where('pageId').equals(pageId).delete()
+    await (productMode
+      ? productDb.visits.where('pageId').equals(pageId).delete()
+      : db.visits.where('pageId').equals(pageId).delete())
   }
 
   return (
@@ -338,11 +444,11 @@ export default function RecentAccess() {
       <div className="rv2-hero">
         <div className="rv2-hero-main">
           <p className="rv2-hello">{t('hello')}</p>
-          <h1 className="rv2-title">{t('pageTitle')}</h1>
+          <h1 className="rv2-title">{t(productMode ? 'pageTitleProduct' : 'pageTitle')}</h1>
           <p className="rv2-desc">
-            {t('pageDesc')}
+            {t(productMode ? 'pageDescProduct' : 'pageDesc')}
             <br />
-            {t('pageDescSub')}
+            {t(productMode ? 'pageDescSubProduct' : 'pageDescSub')}
           </p>
           <div className="rv2-feats">
             <span className="rv2-feat">
@@ -396,14 +502,14 @@ export default function RecentAccess() {
             </span>
             {t('quickStart')}
           </div>
-          <Link className="rv2-quick-link" to="/new">
-            {t('quickStartNew')}
+          <Link className="rv2-quick-link" to={productMode ? '/product' : '/new'} draggable={false}>
+            {t(productMode ? 'quickStartNewProduct' : 'quickStartNew')}
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="m9 18 6-6-6-6" />
             </svg>
           </Link>
-          <Link className="btn-primary rv2-quick-btn" to="/new">
-            {t('quickStartBtn')}
+          <Link className="btn-primary rv2-quick-btn" to={productMode ? '/product' : '/new'} draggable={false}>
+            {t(productMode ? 'quickStartBtnProduct' : 'quickStartBtn')}
           </Link>
         </div>
       </div>
@@ -477,7 +583,7 @@ export default function RecentAccess() {
       <div className="rv2-layout">
         {/* ===== 主栏：继续上次工作 + 访问记录 ===== */}
         <div className="rv2-main">
-          {lastPage && lastEntry && (
+          {lastItem && lastEntry && (
             <div className="rv2-card rv2-continue">
               <div className="rv2-card-head">
                 <span className="rv2-card-title">
@@ -487,12 +593,16 @@ export default function RecentAccess() {
                   </svg>
                   {t('resumeWork')}
                 </span>
-                <span className="rv2-card-sub">{t('resumeDesc')}</span>
+                <span className="rv2-card-sub">{t(productMode ? 'resumeDescProduct' : 'resumeDesc')}</span>
               </div>
-              <Link className="rv2-continue-body" to={`/project/${lastPage.projectId}/page/${lastPage.id}`}>
+              <Link
+                className="rv2-continue-body"
+                to={productMode ? `/product/${lastItem.projectId}/set/${lastItem.id}` : `/project/${lastItem.projectId}/page/${lastItem.id}`}
+                draggable={false}
+              >
                 <span className="rv2-continue-thumb">
-                  {designThumb ? (
-                    <img src={designThumb} alt={lastPage.pageName} draggable={false} />
+                  {(productMode ? lastItem.thumb : designThumb) ? (
+                    <img src={productMode ? lastItem.thumb : designThumb} alt={lastItem.name} draggable={false} />
                   ) : (
                     <span className="rv2-thumb-placeholder">
                       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -501,7 +611,7 @@ export default function RecentAccess() {
                       </svg>
                     </span>
                   )}
-                  <span className="rv2-thumb-badge">
+                  <span className="badge badge-sm rv2-thumb-badge">
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                       <circle cx="12" cy="12" r="9" />
                       <path d="M12 7v5l3 2" />
@@ -511,15 +621,19 @@ export default function RecentAccess() {
                 </span>
                 <span className="rv2-continue-info">
                   <span className="rv2-continue-name">
-                    {lastPage.pageName}
-                    <i>·</i>
-                    {projectName(lastPage.projectId)} / {folderName(lastPage.folderId) || t('ungrouped')}
+                    {lastItem.name}
+                    {/* 项目名以标签样式展示（仅项目名，不带分组/文件夹路径） */}
+                    <span className="badge badge-sm rv2-continue-project">{projectName(lastItem.projectId)}</span>
                   </span>
                   <span className="rv2-continue-desc">
-                    {lastPage.figmaUrl ? t('descWithFigma') : t('descWithoutFigma')}
+                    {productMode ? t('descSetProduct') : lastItem.hasFigma ? t('descWithFigma') : t('descWithoutFigma')}
                   </span>
                   <span className="rv2-continue-tags">
-                    <PlatformBadge platform={lastPage.platform} />
+                    {productMode ? (
+                      <span className="badge badge-sm">{t('pageInCount', { count: lastItem.pageCount ?? 1 })}</span>
+                    ) : (
+                      <PlatformBadge platform={lastItem.platform!} />
+                    )}
                   </span>
                   <span className="rv2-continue-meta">
                     <span>
@@ -596,7 +710,7 @@ export default function RecentAccess() {
                 <div className="rv2-table-head">
                   <span>{t('colProjectPage')}</span>
                   <span>{t('colPathDesc')}</span>
-                  <span>{t('colDevice')}</span>
+                  <span>{t('colVisitCount')}</span>
                   <span>{t('colTime')}</span>
                 </div>
                 {(() => {
@@ -616,30 +730,28 @@ export default function RecentAccess() {
                       {renderGroupHead(g.key, g.items.length)}
                       {!collapsedGroups.has(g.key) &&
                         g.items.map(([pageId, ts]) => {
-                          const pg = pageMap.get(pageId)!
+                          const pg = itemMap.get(pageId)!
                           const path = folderName(pg.folderId)
                             ? `${projectName(pg.projectId)} / ${folderName(pg.folderId)}`
                             : projectName(pg.projectId)
                           return (
                             <Link
                               key={pageId}
-                              to={`/project/${pg.projectId}/page/${pg.id}`}
+                              to={productMode ? `/product/${pg.projectId}/set/${pg.id}` : `/project/${pg.projectId}/page/${pg.id}`}
                               className="rv2-table-row"
-                              title={pg.pageName}
+                              title={pg.name}
                             >
                               <span className="rv2-cell-page">
-                                <ProjectLogo project={projOf(pg.projectId, pg.pageName, [pg.platform])} size={34} />
+                                <ProjectLogo project={projOf(pg.projectId, pg.name)} size={34} />
                                 <span className="rv2-cell-page-text">
-                                  <b>{pg.pageName}</b>
+                                  <b>{pg.name}</b>
                                 </span>
                               </span>
                               <span className="rv2-cell-path">
                                 <b>{path}</b>
-                                <i>{pg.devUrl || pg.figmaUrl || '—'}</i>
+                                <i>{productMode ? t('pageInCount', { count: pg.pageCount ?? 1 }) : pg.url || '—'}</i>
                               </span>
-                              <span className="rv2-cell-device">
-                                <PlatformBadge platform={pg.platform} />
-                              </span>
+                              <span className="rv2-cell-device">{t('visitInCount', { count: visitCountByPage.get(pageId) ?? 1 })}</span>
                               <span className="rv2-cell-time">{fmtVisitTime(ts)}</span>
                               {/* 删除记录：无独立操作列，悬停行时显示 */}
                               <span
@@ -649,7 +761,7 @@ export default function RecentAccess() {
                                 onClick={(e) => {
                                   e.preventDefault()
                                   e.stopPropagation()
-                                  void handleDeleteVisits(pg.id, pg.pageName)
+                                  void handleDeleteVisits(pg.id, pg.name)
                                 }}
                               >
                                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -682,9 +794,14 @@ export default function RecentAccess() {
                       {renderGroupHead(g.key, g.items.length)}
                       {!collapsedGroups.has(g.key) &&
                         g.items.map((grp) => (
-                          <Link key={grp.projectId} to={`/project/${grp.projectId}`} className="rv2-table-row">
+                          <Link
+                            key={grp.projectId}
+                            to={`${productMode ? '/product' : '/project'}/${grp.projectId}`}
+                            className="rv2-table-row"
+                            draggable={false}
+                          >
                             <span className="rv2-cell-page">
-                              <ProjectLogo project={projOf(grp.projectId, projectName(grp.projectId), ['pc'])} size={34} />
+                              <ProjectLogo project={projOf(grp.projectId, projectName(grp.projectId))} size={34} />
                               <span className="rv2-cell-page-text">
                                 <b>{projectName(grp.projectId)}</b>
                               </span>
@@ -704,51 +821,49 @@ export default function RecentAccess() {
           </div>
         </div>
 
-        {/* ===== 侧栏：常用工具 + 最近活动 ===== */}
+        {/* ===== 侧栏：常用工具（仅走查模式）+ 最近活动 ===== */}
         <aside className="rv2-side">
-          <div className="rv2-card">
-            <div className="rv2-card-head">
-              <span className="rv2-card-title">{t('toolBox')}</span>
-              <span className="rv2-card-more rv2-more-end" title={t('moreComingSoon')}>
-                {t('more')}
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="m9 18 6-6-6-6" />
-                </svg>
-              </span>
+          {!productMode && (
+            <div className="rv2-card">
+              <div className="rv2-card-head">
+                <span className="rv2-card-title">{t('toolBox')}</span>
+              </div>
+              <div className="rv2-tools">
+                {QUICK_TOOLS.map((tool) => (
+                  <button key={tool.key} type="button" className="rv2-tool" onClick={() => openTool(tool.key)}>
+                    <span className={`rv2-tool-icon ${tool.key}`}>{tool.icon}</span>
+                    <span className="rv2-tool-text">
+                      <b>{t(tool.nameKey)}</b>
+                      <i>{t(tool.subKey)}</i>
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="rv2-tools">
-              {QUICK_TOOLS.map((tool) => (
-                <div key={tool.key} className="rv2-tool" title={t('featureComingSoon')}>
-                  <span className={`rv2-tool-icon ${tool.key}`}>{tool.icon}</span>
-                  <span className="rv2-tool-text">
-                    <b>{t(tool.nameKey)}</b>
-                    <i>{t(tool.subKey)}</i>
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
+          )}
 
-          <div className="rv2-card">
+          {/* 产品模式侧栏无常用工具，最近活动从首行跨满两行，底部与左列记录对齐（配合 .rv2-activity-top） */}
+          <div className={`rv2-card${productMode ? ' rv2-activity-top' : ''}`}>
             <div className="rv2-card-head">
               <span className="rv2-card-title">{t('recentActivity')}</span>
             </div>
             {activityItems.length > 0 ? (
               <div className="rv2-activity">
                 {activityItems.map((v) => {
-                  const pg = pageMap.get(v.pageId)
+                  const pg = itemMap.get(v.pageId)
                   if (!pg) return null
                   return (
                     <Link
                       key={v.id}
-                      to={`/project/${v.projectId}/page/${v.pageId}`}
+                      to={productMode ? `/product/${pg.projectId}/set/${pg.id}` : `/project/${pg.projectId}/page/${pg.id}`}
                       className="rv2-activity-item"
+                      draggable={false}
                     >
-                      <span className={`rv2-activity-dot ${pg.platform}`} />
+                      <span className={`rv2-activity-dot${pg.platform ? ` ${pg.platform}` : ''}`} />
                       <span className="rv2-activity-body">
-                        <b>{t('visitedPage', { name: pg.pageName })}</b>
+                        <b>{t('visitedPage', { name: pg.name })}</b>
                         <i>
-                          {timeAgo(v.visitedAt)} · {t(`platform_${pg.platform}`)}
+                          {timeAgo(v.visitedAt)} · {productMode ? projectName(pg.projectId) : t(`platform_${pg.platform}`)}
                         </i>
                       </span>
                     </Link>

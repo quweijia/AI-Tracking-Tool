@@ -45,7 +45,7 @@ struct SpecPill: View {
         Text(text)
             .font(.system(size: FontTokens.Size.captionSmall, weight: .medium))
             .padding(.horizontal, Spacing.mg)
-            .padding(.vertical, Spacing.xs)
+            .padding(.vertical, Spacing.xxs)
             .background(color.opacity(0.14), in: Capsule())
             .foregroundStyle(color)
     }
@@ -56,7 +56,7 @@ struct SyncStateDot: View {
     let label: String
     var ok: Bool
     var body: some View {
-        HStack(spacing: Spacing.xxs) {
+        HStack(spacing: Spacing.xs) {
             Circle().fill(ok  ? Color.success : .textSecondary.opacity(0.5)).frame(width: 6, height: 6)
             Text(label).font(.system(size: FontTokens.Size.captionSmall)).foregroundStyle(ok  ? Color.success : .textSecondary)
         }
@@ -268,7 +268,7 @@ struct SpecsIndexView: View {
                 .foregroundStyle(color)
                 .frame(width: 24, height: 24)
                 .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: Radius.tiny))
-            VStack(alignment: .leading, spacing: Spacing.xs) {
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
                 Text(title).font(.system(size: FontTokens.Size.captionSmall, weight: .semibold))
                 Text(sub).font(.system(size: FontTokens.Size.caption)).foregroundStyle(Color.textSecondary)
             }
@@ -375,7 +375,7 @@ struct SpecsIndexView: View {
                     }
                     .font(.system(size: FontTokens.Size.captionSmall, weight: .medium))
                     .foregroundStyle(Color.textSecondary)
-                    .padding(.bottom, Spacing.xs)
+                    .padding(.bottom, Spacing.xxs)
                     ForEach(recentRows, id: \.spec.id) { row in
                         NavigationLink(value: SpecSpecRoute(specId: row.spec.id)) {
                             HStack {
@@ -397,7 +397,7 @@ struct SpecsIndexView: View {
                             }
                             .font(.system(size: FontTokens.Size.captionSmall))
                             .foregroundStyle(Color.text)
-                            .padding(.vertical, Spacing.xs)
+                            .padding(.vertical, Spacing.xxs)
                         }
                         .buttonStyle(.plain)
                         Divider()
@@ -430,7 +430,7 @@ struct SpecsIndexView: View {
                 .font(.system(size: FontTokens.Size.captionSmall, weight: .bold))
                 .frame(width: 16, height: 16)
                 .background(Color.primary.opacity(0.14), in: Circle())
-            VStack(alignment: .leading, spacing: Spacing.xs) {
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
                 Label(title, systemImage: icon).font(.system(size: FontTokens.Size.captionSmall, weight: .semibold))
                 Text(desc).font(.system(size: FontTokens.Size.caption)).foregroundStyle(Color.textSecondary)
             }
@@ -458,7 +458,7 @@ struct SpecsIndexView: View {
                 .foregroundStyle(Color.primary)
                 .frame(width: 30, height: 30)
                 .background(Color.primary.opacity(0.1), in: RoundedRectangle(cornerRadius: Radius.sm))
-            VStack(alignment: .leading, spacing: Spacing.xs) {
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
                 Text(value).font(.system(size: FontTokens.Size.sectionHeader, weight: .semibold))
                 Text(label).font(.system(size: FontTokens.Size.captionSmall)).foregroundStyle(Color.textSecondary)
             }
@@ -621,7 +621,7 @@ private struct SpecCheckRowView: View {
             Text(row.remoteTs > 0 ? fmtShortTime(row.remoteTs) : "—").frame(width: 90, alignment: .leading)
         }
         .font(.system(size: FontTokens.Size.captionSmall))
-        .padding(.vertical, Spacing.xs)
+        .padding(.vertical, Spacing.xxs)
     }
 }
 

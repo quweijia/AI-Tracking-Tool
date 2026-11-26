@@ -328,7 +328,7 @@ struct CompareWorkbenchView: View {
                 Button {
                     tool = t
                 } label: {
-                    VStack(spacing: Spacing.xs) {
+                    VStack(spacing: Spacing.xxs) {
                         Image(systemName: t.systemImage)
                             .font(.system(size: FontTokens.Size.bodySmall))
                         Text(t.label)

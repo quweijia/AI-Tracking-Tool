@@ -15,5 +15,5 @@ const SOURCE_META: Record<IssueSource, { label: string; cls: string }> = {
 export default function SourceBadge({ source }: { source?: IssueSource }) {
   const { t } = useTranslation('sourceBadge')
   const meta = SOURCE_META[source ?? 'manual']
-  return <span className={`source-badge ${meta.cls}`}>{t(meta.label)}</span>
+  return <span className={`badge source-badge ${meta.cls}`}>{t(meta.label)}</span>
 }

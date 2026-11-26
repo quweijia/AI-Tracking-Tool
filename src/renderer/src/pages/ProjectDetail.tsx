@@ -3,6 +3,8 @@ import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { db, platformList, bySort, Folder } from '../db'
+import { pushUndo } from '../dndUndo'
+import { emitGridDrag } from '../gridDragBus'
 import PageGrid from '../components/PageGrid'
 import { PlatformBadge } from '../components/PlatformBadge'
 import { ProjectLogo } from '../components/ProjectCard'
@@ -60,9 +62,12 @@ export default function ProjectDetail() {
   const [batchMode, setBatchMode] = useState(false)
 
   const project = useLiveQuery(() => db.projects.get(projectId!), [projectId])
-  // 项目下全部文件夹（含各层，用于面包屑与子级筛选），手动 sortNo 优先
+  // 项目下全部文件夹（含各层，用于面包屑与子级筛选；回收站中的不参与），手动 sortNo 优先
   const allFolders = useLiveQuery(
-    async () => (await db.folders.where('projectId').equals(projectId!).toArray()).sort(bySort),
+    async () =>
+      (await db.folders.where('projectId').equals(projectId!).toArray())
+        .filter((f) => !f.deletedAt)
+        .sort(bySort),
     [projectId]
   )
 
@@ -89,15 +94,17 @@ export default function ProjectDetail() {
       ),
     [allFolders, activeFolderId]
   )
-  /** 当前层页面（根级 = 未分组页面） */
+  /** 当前层页面（根级 = 未分组页面；回收站中的不展示） */
   const levelPages = useLiveQuery(
     async () => {
       if (!projectId) return []
       if (activeFolderId) {
-        return (await db.pages.where('folderId').equals(activeFolderId).toArray()).sort(bySort)
+        return (await db.pages.where('folderId').equals(activeFolderId).toArray())
+          .filter((p) => !p.deletedAt)
+          .sort(bySort)
       }
       return (await db.pages.where('projectId').equals(projectId).toArray())
-        .filter((p) => !p.folderId)
+        .filter((p) => !p.folderId && !p.deletedAt)
         .sort(bySort)
     },
     [projectId, activeFolderId]
@@ -131,6 +138,60 @@ export default function ProjectDetail() {
     setSearchParams(id ? { f: id } : {})
   }
 
+  // ===== 网格拖拽 → 面包屑放置：拖住页面/文件夹到路径胶囊上释放，即移动到该层（最高到项目根） =====
+  type GridDrag = { kind: 'page' | 'folder'; id: string }
+  const [gridDrag, setGridDragState] = useState<GridDrag | null>(null)
+  /** 当前拖拽悬停的路径胶囊 id（高亮提示） */
+  const [crumbDrop, setCrumbDrop] = useState<string | null>(null)
+
+  const setGridDrag = (d: GridDrag | null) => {
+    setGridDragState(d)
+    // 拖拽结束（含中途取消释放）时同步清除悬停高亮
+    if (!d) setCrumbDrop(null)
+    // 广播给侧边栏树（Layout）：网格卡片可拖到左侧文件夹/项目根节点放置
+    emitGridDrag(d ? { mode: 'walk', kind: d.kind, id: d.id, projectId: projectId!, parentId: activeFolderId || undefined } : null)
+  }
+
+  /** id 是否为 ancestorId 的子孙文件夹（沿 parentId 上溯，防环） */
+  const folderIsDescendant = (ancestorId: string, id: string): boolean => {
+    let cur = (allFolders ?? []).find((f) => f.id === id)
+    const seen = new Set<string>()
+    while (cur?.parentId) {
+      if (cur.parentId === ancestorId) return true
+      if (seen.has(cur.parentId)) return false
+      seen.add(cur.parentId)
+      cur = (allFolders ?? []).find((f) => f.id === cur!.parentId)
+    }
+    return false
+  }
+
+  /** 拖到路径胶囊释放：移动到该层末尾（'' = 项目根，写回无 parentId/folderId 的初始态） */
+  const moveToCrumb = async (targetFolderId: string, d: GridDrag) => {
+    if (d.kind === 'page') {
+      const pg = (levelPages ?? []).find((p) => p.id === d.id)
+      const target = targetFolderId || undefined
+      if (!pg || pg.folderId === target) return
+      await pushUndo('walk')
+      const siblings = targetFolderId
+        ? await db.pages.where('folderId').equals(targetFolderId).toArray()
+        : (await db.pages.where('projectId').equals(projectId!).toArray()).filter((p) => !p.folderId)
+      const maxSort = siblings.reduce((m, p) => Math.max(m, p.sortNo ?? 0), 0)
+      await db.pages.update(d.id, { folderId: target, sortNo: maxSort + 10 })
+    } else {
+      const f = (allFolders ?? []).find((x) => x.id === d.id)
+      const target = targetFolderId || undefined
+      if (!f || f.parentId === target) return
+      // 防环：不允许放入自己或自己的子孙（路径层正常操作下不可能是子孙，仍兜底拒绝）
+      if (targetFolderId && (targetFolderId === d.id || folderIsDescendant(d.id, targetFolderId))) return
+      await pushUndo('walk')
+      const siblings = targetFolderId
+        ? await db.folders.where('parentId').equals(targetFolderId).toArray()
+        : (allFolders ?? []).filter((x) => !x.parentId)
+      const maxSort = siblings.reduce((m, x) => Math.max(m, x.sortNo ?? 0), 0)
+      await db.folders.update(d.id, { parentId: target, sortNo: maxSort + 10 })
+    }
+  }
+
   /** 文件夹弹窗关闭：编辑模式若文件夹已被删除且是当前层，退回项目根 */
   const closeFolderModal = async () => {
     const edited = folderModal?.folder
@@ -151,15 +212,32 @@ export default function ProjectDetail() {
         <div className="rv2-hero-main">
           {inFolderView && activeFolder ? (
             <>
-              {/* 路径胶囊链：与「返回项目列表」同款外观，每层可点击直达；当前层显示在下方大标题 */}
+              {/* 路径胶囊链：与「返回项目列表」同款外观，每层可点击直达；当前层显示在下方大标题。
+                  拖住网格内的页面/文件夹悬停到胶囊上高亮，释放即移动到该层 */}
               <div className="hero-crumb">
                 {crumbTrail.map((seg, i) => (
                   <button
                     key={seg.id || 'root'}
                     type="button"
-                    className="back-link hero-crumb-pill"
+                    className={`back-link hero-crumb-pill${i === 0 ? ' has-icon' : ''}${crumbDrop === seg.id ? ' crumb-drop' : ''}`}
                     onClick={() => jumpToFolder(seg.id)}
                     title={seg.name}
+                    onDragOver={(e) => {
+                      if (!gridDrag) return
+                      e.preventDefault()
+                      e.dataTransfer.dropEffect = 'move'
+                      setCrumbDrop((prev) => (prev === seg.id ? prev : seg.id))
+                    }}
+                    onDragLeave={(e) => {
+                      if (e.currentTarget.contains(e.relatedTarget as Node)) return
+                      setCrumbDrop((prev) => (prev === seg.id ? null : prev))
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      const d = gridDrag
+                      setGridDrag(null)
+                      if (d) void moveToCrumb(seg.id, d)
+                    }}
                   >
                     {i === 0 && (
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -175,7 +253,7 @@ export default function ProjectDetail() {
                   className="folder-title-glyph"
                   style={activeFolder.color ? { color: activeFolder.color } : undefined}
                 >
-                  <FolderIconGlyph icon={activeFolder.icon} size={30} />
+                  <FolderIconGlyph icon={activeFolder.icon} size={30} color={activeFolder.color} />
                 </span>
                 <span className="detail-title-text">{activeFolder.name}</span>
                 <button
@@ -189,7 +267,7 @@ export default function ProjectDetail() {
             </>
           ) : (
             <>
-              <Link to="/" className="back-link">
+              <Link to="/" className="back-link" draggable={false}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                   <path d="M15 18l-6-6 6-6" />
                 </svg>
@@ -255,6 +333,7 @@ export default function ProjectDetail() {
         addLink={`/project/${projectId}/new${activeFolderId ? `?folderId=${activeFolderId}` : ''}`}
         batchMode={batchMode}
         onToggleBatch={() => setBatchMode(!batchMode)}
+        onDragChange={setGridDrag}
       />
 
       {allFolders !== undefined && levelPages !== undefined && allFolders.length === 0 && levelPages.length === 0 && (
