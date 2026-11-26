@@ -23,12 +23,19 @@ UI 设计走查（Visual QA）桌面应用，面向设计/前端协作场景：�
 - **导出交互式 HTML 走查报告**：设计稿与开发截图并排、标注可点击查看详情、支持全屏查看、问题明细清单、AI 报告分析区块
 - **研发修改报告**导出：含处理结果与未回应提示
 - **飞书集成**：一键生成飞书文档（自动上传截图、压缩超限附件）+ 问题明细多维表（人员分配、状态单选），失败自动降级并透出 warning
+- **回收站（v2.0）**：删除的项目/问题进入回收站可恢复，过期数据自动清理
+
+### 产品标注模式（v2.0 新增）
+- **产品级管理**：产品 → 项目两级分组，与设计稿走查体系并行，适合按产品维度沉淀走查结论
+- 产品画布标注：独立于对比工作台的标注画布
+- 产品走查报告：独立导出产品维度的 HTML 报告
 
 ### 体验
 - 深色 / 浅色 / 跟随系统三态主题
 - 最近访问记录（按页面活动时间排序）、继续上次工作入口
 - 项目 Logo 上传或文字占位（8 色板），平台四类型标签（H5 / PC / 大屏 / Electron）
-- 自绘 macOS 窗口控制按钮（修复原生红绿灯失焦消失问题）、中文应用菜单
+- 自绘窗口控制按钮（macOS 红绿灯 / Windows 三按钮统一自绘，失焦置灰状态经 IPC 同步）、中文应用菜单
+- macOS 截屏权限内置引导页（v2.0），减少首次配置卡点
 
 ## 技术栈
 
@@ -38,7 +45,7 @@ UI 设计走查（Visual QA）桌面应用，面向设计/前端协作场景：�
 | 渲染层 | React 18 + TypeScript + react-router（HashRouter）+ zustand |
 | 数据 | Dexie 4（IndexedDB），标注坐标 0~1 归一化存储 |
 | 标注层 | SVG 覆盖方案（双图独立标注） |
-| 打包 | electron-builder 26（mac dmg/zip 双架构 + win nsis） |
+| 打包 | electron-builder 26（mac dmg 双架构 + win nsis，ASCII 产物名） |
 
 ## 下载安装（发行包）
 
@@ -46,11 +53,11 @@ UI 设计走查（Visual QA）桌面应用，面向设计/前端协作场景：�
 
 | 平台 | 产物 | 说明 |
 |---|---|---|
-| macOS Intel | `AI 走查工具-{version}-x64.dmg` / `.zip` | Intel 芯片 |
-| macOS Apple Silicon | `AI 走查工具-{version}-arm64.dmg` / `.zip` | M1/M2/M3/M4 系列 |
-| Windows x64 | `AI-Walkthrough-Setup-{version}.exe` | NSIS 向导式安装，可选安装目录 |
+| macOS Intel | `AI-Walkthrough-{version}-x64.dmg` | Intel 芯片 |
+| macOS Apple Silicon | `AI-Walkthrough-{version}-arm64.dmg` | M1/M2/M3/M4 系列 |
+| Windows x64 | `AI-Walkthrough-{version}-x64-setup.exe` | NSIS 向导式安装，可选安装目录 |
 
-也可直接从 GitHub Releases 下载（Release 资产使用 ASCII 文件名，如 `AI-Walkthrough-1.0.0-x64.dmg`）：https://github.com/quweijia/AI-Tracking-Tool/releases
+直接从 GitHub Releases 下载：https://github.com/quweijia/AI-Tracking-Tool/releases （如 v2.0.0 提供 `AI-Walkthrough-2.0.0-arm64.dmg` / `AI-Walkthrough-2.0.0-x64.dmg` / `AI-Walkthrough-2.0.0-x64-setup.exe`）
 
 未申请代码签名证书：
 
@@ -86,14 +93,15 @@ npm run build:all      # 一次性打包 macOS 双架构 + Windows x64
 
 ```
 src/
-├── main/        # Electron 主进程（窗口、IPC、AI 识别、飞书集成、文件存取）
+├── main/        # Electron 主进程（窗口、IPC、AI 识别、飞书集成、文件存取、走查会话）
 ├── preload/     # contextBridge 预加载
 └── renderer/    # React 渲染层
-    ├── pages/       # 项目列表 / 项目详情 / 对比工作台 / 问题清单 / 报告导出 / 设置
-    ├── components/  # 画布标注、问题抽屉、各弹窗、平台标签等
+    ├── pages/       # 项目列表 / 项目详情 / 对比工作台 / 问题清单 / 报告导出 / 产品标注模式 / 回收站 / 设置
+    ├── components/  # 画布标注、问题抽屉、各弹窗、Toast/Tooltip 等公共基件
     ├── stores/      # zustand 状态
-    ├── db/          # Dexie 数据模型与级联删除
+    ├── db/          # Dexie 数据模型、级联删除与回收站清理
     └── styles/      # 全局样式（深浅色主题变量）
+swiftui/          # SwiftUI 原生版（开发中，核心模块对等移植）
 ```
 
 ## License
